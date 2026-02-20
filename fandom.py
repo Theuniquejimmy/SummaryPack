@@ -95,7 +95,7 @@ if query:
                             
                             # PROMPT: Increased word limit/detail instructions
                             prompt = f"""
-                            Act as a TV historian. Write a comprehensive recap of S{s_val}E{ep_val} of {show['name']}.
+                            Act as a TV historian. Write a long-form comprehensive recap of S{s_val}E{ep_val} of {show['name']}.
                             Title: {ep_data['name']}
                             Fandom Lore: {lore}
                             Summary: {re.sub('<[^<]+>', '', ep_data.get('summary', ''))}
@@ -148,6 +148,7 @@ if query:
     except Exception as e: st.error(f"Error: {e}")
 else:
     st.info("Search a show to begin your deep-dive.")
+
 
 
 
