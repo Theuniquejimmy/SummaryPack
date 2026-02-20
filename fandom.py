@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import requests
 import urllib.parse
 from bs4 import BeautifulSoup
@@ -18,12 +19,10 @@ WIKI_ALIASES = {
 
 # --- NEURAL TTS HELPER ---
 async def generate_neural_audio(text, voice, filename="lore.mp3"):
-    """Generates high-quality audio using Microsoft's Neural voices."""
     communicate = edge_tts.Communicate(text, voice)
     await communicate.save(filename)
 
 def create_audio(text, voice_choice):
-    # Mapping friendly names to the actual neural voice codes
     voice_map = {
         "Christopher (Deep, Cinematic)": "en-US-ChristopherNeural",
         "Aria (Clear, Professional)": "en-US-AriaNeural",
@@ -31,7 +30,6 @@ def create_audio(text, voice_choice):
     }
     selected_voice = voice_map.get(voice_choice, "en-US-ChristopherNeural")
     
-    # Run the async TTS generation safely in Streamlit
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     loop.run_until_complete(generate_neural_audio(text, selected_voice))
@@ -92,6 +90,8 @@ if 'lore_text' not in st.session_state:
     st.session_state.ep_name = None
     st.session_state.image_url = None
     st.session_state.wiki_url = None
+if 'audio_ready' not in st.session_state:
+    st.session_state.audio_ready = False
 
 # --- UI LOGIC ---
 st.title("📖 TV Vault Reader")
@@ -124,17 +124,17 @@ if query:
                             st.session_state.ep_name = api_data['name']
                             st.session_state.image_url = api_data.get('image', {}).get('original')
                             st.session_state.wiki_url = found_url
+                            st.session_state.audio_ready = False # Reset audio state for new episode
                         else:
                             st.error(f"Text not found. Ensure the episode exists on {wiki_slug}.fandom.com.")
                             st.session_state.lore_text = None
                     else: st.error("Episode name not found.")
                 else: st.error("Could not locate this specific episode number.")
 
-            # --- THE PRO READER UI ---
+            # --- THE TELEPROMPTER UI ---
             if st.session_state.lore_text:
                 st.divider()
                 
-                # Reader Settings Dashboard
                 with st.expander("⚙️ Reader Settings", expanded=False):
                     rc1, rc2, rc3 = st.columns(3)
                     theme = rc1.selectbox("Theme", ["Dark", "Sepia", "Light"])
@@ -148,43 +148,86 @@ if query:
                 }
                 current_theme = theme_styles[theme]
 
-                st.markdown(f"""
-                    <style>
-                    .pro-reader {{
-                        background-color: {current_theme['bg']};
-                        color: {current_theme['text']};
-                        font-family: sans-serif;
-                        font-size: {font_size}rem;
-                        line-height: 1.8;
-                        padding: 40px 30px;
-                        border-radius: 12px;
-                        box-shadow: 0 4px 15px rgba(0,0,0,0.1);
-                        max-width: 800px;
-                        margin: 0 auto;
-                        transition: all 0.3s ease;
-                    }}
-                    .pro-reader h3 {{ color: {current_theme['accent']}; margin-top: 1.5em; }}
-                    </style>
-                """, unsafe_allow_html=True)
-
                 st.subheader(st.session_state.ep_name)
-                
                 if st.session_state.image_url:
                     st.image(st.session_state.image_url, use_container_width=True)
                 
-                # Audio Player (Now using Neural TTS)
-                if st.button("🔊 Play Cinematic Narration", use_container_width=True):
-                    with st.spinner("Synthesizing neural audio... (this takes a few seconds for long plots)"):
-                        clean_tts_text = BeautifulSoup(st.session_state.lore_text, "html.parser").get_text(separator=' ')
-                        
-                        # Generate the audio using our new Edge-TTS function
-                        create_audio(clean_tts_text, voice_setting)
-                        
-                        with open("lore.mp3", "rb") as f:
-                            b64 = base64.b64encode(f.read()).decode()
-                            st.markdown(f'<audio controls autoplay style="width:100%; margin-bottom: 20px;"><source src="data:audio/mp3;base64,{b64}" type="audio/mp3"></audio>', unsafe_allow_html=True)
+                # Button to generate the audio
+                if not st.session_state.audio_ready:
+                    if st.button("🔊 Load Teleprompter Mode", use_container_width=True):
+                        with st.spinner("Synthesizing neural audio..."):
+                            clean_tts_text = BeautifulSoup(st.session_state.lore_text, "html.parser").get_text(separator=' ')
+                            create_audio(clean_tts_text, voice_setting)
+                            with open("lore.mp3", "rb") as f:
+                                st.session_state.b64_audio = base64.b64encode(f.read()).decode()
+                            st.session_state.audio_ready = True
+                            st.rerun()
 
-                st.markdown(f'<div class="pro-reader">{st.session_state.lore_text}</div>', unsafe_allow_html=True)
+                # Render the Teleprompter HTML Component if audio is ready
+                if st.session_state.audio_ready:
+                    teleprompter_html = f"""
+                    <style>
+                        body {{
+                            background-color: {current_theme['bg']};
+                            color: {current_theme['text']};
+                            font-family: sans-serif;
+                            margin: 0;
+                            padding: 0;
+                            border-radius: 12px;
+                        }}
+                        .audio-container {{
+                            padding: 15px;
+                            background-color: {current_theme['bg']};
+                            border-bottom: 2px solid {current_theme['accent']};
+                        }}
+                        .pro-reader {{
+                            font-size: {font_size}rem;
+                            line-height: 1.8;
+                            padding: 20px 30px;
+                            height: 60vh; /* Fixed height creates the scrollable box */
+                            overflow-y: auto;
+                            scroll-behavior: smooth;
+                        }}
+                        h3 {{ color: {current_theme['accent']}; margin-top: 1.5em; }}
+                        p {{ margin-bottom: 1.2em; text-align: justify; }}
+                        
+                        /* Custom Scrollbar for sleek UI */
+                        ::-webkit-scrollbar {{ width: 8px; }}
+                        ::-webkit-scrollbar-track {{ background: transparent; }}
+                        ::-webkit-scrollbar-thumb {{ background: {current_theme['accent']}; border-radius: 4px; }}
+                    </style>
+
+                    <div class="audio-container">
+                        <audio id="narrator-audio" controls autoplay style="width: 100%;">
+                            <source src="data:audio/mp3;base64,{st.session_state.b64_audio}" type="audio/mp3">
+                        </audio>
+                    </div>
+
+                    <div id="text-container" class="pro-reader">
+                        {st.session_state.lore_text}
+                    </div>
+
+                    <script>
+                        const audio = document.getElementById("narrator-audio");
+                        const container = document.getElementById("text-container");
+
+                        // The Auto-Scroll Logic
+                        audio.addEventListener("timeupdate", () => {{
+                            if (!isNaN(audio.duration) && audio.duration > 0) {{
+                                // Math trick: Finishes scrolling slightly before the audio ends so you can read the last line
+                                let progress = audio.currentTime / (audio.duration * 0.95);
+                                if (progress > 1) progress = 1;
+
+                                const maxScroll = container.scrollHeight - container.clientHeight;
+                                container.scrollTop = maxScroll * progress;
+                            }}
+                        }});
+                    </script>
+                    """
+                    
+                    # Embed the entire HTML block as an iframe component
+                    components.html(teleprompter_html, height=650, scrolling=False)
+
                 st.caption(f"Source: [Fandom Wiki]({st.session_state.wiki_url})")
 
     except Exception as e:
