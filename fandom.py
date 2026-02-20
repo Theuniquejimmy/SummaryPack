@@ -1,11 +1,13 @@
 import streamlit as st
-import streamlit.components.v1 as components  # NEW IMPORT REQUIRED
+import streamlit.components.v1 as components
 import requests
 import urllib.parse
 from bs4 import BeautifulSoup
 import base64
 import edge_tts
 import asyncio
+from ebooklib import epub
+import os
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="TV Vault Reader", page_icon="📖", layout="centered")
@@ -33,7 +35,6 @@ def create_audio(text, voice_choice):
         "Natasha (Australian, Smooth)": "en-AU-NatashaNeural"
     }
     selected_voice = voice_map.get(voice_choice, "en-US-ChristopherNeural")
-    
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     loop.run_until_complete(generate_neural_audio(text, selected_voice))
@@ -88,10 +89,75 @@ def get_raw_lore(wiki_slug, ep_title):
     except Exception: pass
     return None, None
 
+# --- NEW: EPUB COMPILER ---
+def build_season_epub(show_id, show_name, season_num, wiki_slug):
+    """Fetches all episodes for a season and compiles them into an EPUB file."""
+    # 1. Get all episodes from TVMaze
+    ep_data = requests.get(f"https://api.tvmaze.com/shows/{show_id}/episodes").json()
+    season_episodes = [ep for ep in ep_data if ep['season'] == season_num]
+    
+    if not season_episodes:
+        return None
+        
+    # 2. Initialize the EPUB Book
+    book = epub.EpubBook()
+    book.set_identifier(f"{show_name.replace(' ', '')}_S{season_num}")
+    book.set_title(f"{show_name} - Season {season_num} Lore")
+    book.set_language('en')
+    book.add_author('TV Vault App')
+    
+    chapters = []
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    # 3. Loop through episodes and scrape
+    for i, ep in enumerate(season_episodes):
+        status_text.text(f"Scraping Episode {ep['number']}: {ep['name']}...")
+        raw_text, _ = get_raw_lore(wiki_slug, ep['name'])
+        
+        if raw_text:
+            # Create a chapter
+            c = epub.EpubHtml(title=f"Episode {ep['number']}: {ep['name']}", 
+                              file_name=f"chap_{ep['number']}.xhtml", lang='en')
+            
+            # Add a clean title header inside the chapter text
+            c.content = f"<h2>Episode {ep['number']}: {ep['name']}</h2>\n" + raw_text
+            book.add_item(c)
+            chapters.append(c)
+            
+        progress_bar.progress((i + 1) / len(season_episodes))
+        
+    if not chapters:
+        status_text.text("Failed to find lore for any episodes in this season.")
+        return None
+        
+    status_text.text("Binding EPUB file...")
+    
+    # 4. Finalize the book structure
+    book.toc = tuple(chapters)
+    book.add_item(epub.EpubNcx())
+    book.add_item(epub.EpubNav())
+    
+    # Basic CSS for nice e-reader formatting
+    style = 'h2 { text-align: center; margin-bottom: 2em; } h3 { margin-top: 1.5em; } p { line-height: 1.6; text-align: justify; }'
+    nav_css = epub.EpubItem(uid="style_nav", file_name="style/nav.css", media_type="text/css", content=style)
+    book.add_item(nav_css)
+    
+    book.spine = ['nav'] + chapters
+    
+    filename = f"{show_name.replace(' ', '_')}_Season_{season_num}.epub"
+    epub.write_epub(filename, book)
+    
+    status_text.empty()
+    progress_bar.empty()
+    
+    return filename
+
 # --- STATE INITIALIZATION ---
 if 's_val' not in st.session_state: st.session_state.s_val = 1
 if 'ep_val' not in st.session_state: st.session_state.ep_val = 1
 if 'auto_fetch' not in st.session_state: st.session_state.auto_fetch = False
+if 'epub_ready' not in st.session_state: st.session_state.epub_ready = None
 
 if 'lore_text' not in st.session_state:
     st.session_state.lore_text = None
@@ -125,7 +191,30 @@ if query:
             with c1: st.number_input("Season", min_value=1, key="s_val")
             with c2: st.number_input("Episode", min_value=1, key="ep_val")
 
-            if st.button("🔓 Extract Full Lore", use_container_width=True) or st.session_state.auto_fetch:
+            # --- THE EPUB COMPILER TRIGGER ---
+            if st.button(f"📚 Export Season {st.session_state.s_val} as EPUB", use_container_width=True):
+                compiled_file = build_season_epub(show_data['id'], show_data['name'], st.session_state.s_val, wiki_slug)
+                if compiled_file:
+                    st.session_state.epub_ready = compiled_file
+                    st.success("Season Compiled Successfully!")
+                else:
+                    st.error("Could not compile season. No lore found.")
+            
+            # Render the download button if a file was successfully generated
+            if st.session_state.epub_ready and os.path.exists(st.session_state.epub_ready):
+                with open(st.session_state.epub_ready, "rb") as file:
+                    st.download_button(
+                        label="⬇️ Download Your EPUB Book",
+                        data=file,
+                        file_name=st.session_state.epub_ready,
+                        mime="application/epub+zip",
+                        use_container_width=True
+                    )
+
+            st.divider()
+
+            # --- INDIVIDUAL EPISODE READER ---
+            if st.button("🔓 Read Single Episode", use_container_width=True) or st.session_state.auto_fetch:
                 st.session_state.auto_fetch = False
                 
                 api_url = f"https://api.tvmaze.com/shows/{show_data['id']}/episodebynumber?season={st.session_state.s_val}&number={st.session_state.ep_val}"
@@ -150,7 +239,6 @@ if query:
 
             # --- THE PRO READER UI ---
             if st.session_state.lore_text:
-                st.divider()
                 
                 with st.expander("⚙️ Reader Settings", expanded=False):
                     rc1, rc2 = st.columns([1, 2])
@@ -200,26 +288,14 @@ if query:
                         with open("lore.mp3", "rb") as f:
                             st.session_state.b64_audio = base64.b64encode(f.read()).decode()
 
-                # --- THE FIX: ISOLATED IFRAME COMPONENT ---
                 if st.session_state.b64_audio:
                     realtime_player_html = f"""
                     <!DOCTYPE html>
                     <html>
                     <head>
                     <style>
-                        body {{
-                            margin: 0;
-                            padding: 0;
-                            background-color: transparent;
-                        }}
-                        .player-box {{
-                            background-color: {current_theme['player']}; 
-                            padding: 15px; 
-                            border-radius: 10px; 
-                            border-left: 4px solid {current_theme['accent']};
-                            font-family: sans-serif;
-                            color: {current_theme['text']};
-                        }}
+                        body {{ margin: 0; padding: 0; background-color: transparent; }}
+                        .player-box {{ background-color: {current_theme['player']}; padding: 15px; border-radius: 10px; border-left: 4px solid {current_theme['accent']}; font-family: sans-serif; color: {current_theme['text']}; }}
                     </style>
                     </head>
                     <body>
@@ -234,12 +310,10 @@ if query:
                                 <input type="range" id="speed-slider" min="0.5" max="2.0" step="0.1" value="1.0" style="width: 50%; cursor: pointer;">
                             </div>
                         </div>
-                        
                         <script>
                             const audio = document.getElementById("narrator-audio");
                             const slider = document.getElementById("speed-slider");
                             const display = document.getElementById("speed-display");
-                            
                             slider.addEventListener("input", function() {{
                                 audio.playbackRate = this.value;
                                 display.textContent = parseFloat(this.value).toFixed(1) + "x";
@@ -248,7 +322,6 @@ if query:
                     </body>
                     </html>
                     """
-                    # Render as an iframe so the JS executes perfectly
                     components.html(realtime_player_html, height=120)
 
                 st.markdown(f'<div class="pro-reader">{st.session_state.lore_text}</div>', unsafe_allow_html=True)
