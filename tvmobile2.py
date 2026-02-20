@@ -121,7 +121,7 @@ if query:
                             
                             # THE PROMPT (Using s_val)
                             prompt = f"""
-                            Summarize the major story arcs for {selected_show} Season {s_val}.
+                            Give me at thourought summary of {selected_show} Season {s_val} as if i'v never seen it and need to prepare myself to watch the next season.
                             Episode Context: {full_text[:3500]}
                             
                             RULES:
@@ -129,9 +129,9 @@ if query:
                             2. Friendly, conversational tone.
                             3. NO MARKDOWN (no bolding or hashtags). Use dashes (-) for bullets.
                             4. Do not spoil the next season's cliffhanger.
-                            5. Identify at least two important plot point per episode of the season so of season has 25 epsiodes 25 plot points at least. Cite each with episode tag its from "S*E*" and list them in order of episode.
+                            5. Identify at least TWO important plot point for every episode of the season so, if season has 25 epsiodes 50 plot points at least. Cite each with episode tag its from "S*E*" and list them in order of episode.
                             6. End with a thourough summary of the season hitting the most important plot points. 
-                            7.What you need to know for next season.
+                            7. What I need to know for next season.
                             """
                         else:
                             st.error(f"Season {s_val} not found.")
@@ -156,6 +156,7 @@ if query:
         st.error(f"App Error: {e}")
 else:
     st.info("Enter a show title to begin.")
+
 
 
 
