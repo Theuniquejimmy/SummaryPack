@@ -105,6 +105,7 @@ if query:
                             2. Do not hold back on word count—be thorough and expansive.
                             3. Use a friendly, expert tone. No bolding. Use bullet points for easier reading.
                             4. Be sure to cover how the epoisode ends and where we'll need to be for the next one.
+                            5. Have lots of spoilers, don't miss important details.
                             """
                         else: st.error("Not found."); st.stop()
                     else:
@@ -148,6 +149,7 @@ if query:
     except Exception as e: st.error(f"Error: {e}")
 else:
     st.info("Search a show to begin your deep-dive.")
+
 
 
 
