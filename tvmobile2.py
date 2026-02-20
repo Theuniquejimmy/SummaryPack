@@ -97,7 +97,8 @@ if query:
         - A informative opening acknowledging the episode title and where we are in the season.
         - A setup of where the main characters are at the start of the episode.
         - The main plot points or conflict (use a detailed bulleted list with dashes). CRITICAL: Use your own internal knowledge to fill in any major subplots, romantic developments, or notable guest characters that are missing from the raw data.        - How the episode ends. where do the characters end up?
-        - A quick piece of trivia about the episode, guest stars, or how it ties into the larger season arc.
+        - A quick piece of trivia about the episode, guest stars
+        - How it ties into the larger season arc.
         
                             """
                         else:
@@ -155,6 +156,7 @@ if query:
         st.error(f"App Error: {e}")
 else:
     st.info("Enter a show title to begin.")
+
 
 
 
