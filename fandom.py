@@ -1,6 +1,7 @@
 import streamlit as st
 import requests
 import urllib.parse
+from bs4 import BeautifulSoup
 from gtts import gTTS
 import base64
 
@@ -34,69 +35,87 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- THE MEDIAWIKI API EXTRACTOR ---
+# --- THE 2-STEP API CRAWLER ---
 def get_raw_lore(wiki_slug, ep_title):
     api_url = f"https://{wiki_slug.lower()}.fandom.com/api.php"
     
-    # We don't need underscores for the API; natural spaces work perfectly!
-    variations = [
-        ep_title,
-        f"{ep_title} (episode)",
-        f"{ep_title} (TV episode)"
-    ]
+    # STEP 1: Search the wiki database to find the exact, case-sensitive page title
+    search_params = {
+        "action": "query",
+        "list": "search",
+        "srsearch": ep_title,
+        "format": "json"
+    }
     
-    for v in variations:
-        params = {
-            "action": "query",
-            "prop": "extracts",
-            "explaintext": "1", # This tells the server to strip all HTML automatically
-            "titles": v,
+    try:
+        search_res = requests.get(api_url, params=search_params, timeout=10).json()
+        search_results = search_res.get("query", {}).get("search", [])
+        
+        if not search_results:
+            return None, None
+            
+        # Get the exact title from the best match
+        exact_title = search_results[0]["title"]
+        page_url = f"https://{wiki_slug.lower()}.fandom.com/wiki/{urllib.parse.quote(exact_title.replace(' ', '_'))}"
+        
+        # STEP 2: Ask the API for the pure HTML text of that specific page
+        parse_params = {
+            "action": "parse",
+            "page": exact_title,
+            "prop": "text",
             "format": "json",
-            "redirects": "1"    # Automatically follow Fandom redirects
+            "redirects": "1"
         }
         
-        try:
-            res = requests.get(api_url, params=params, timeout=10)
-            if res.status_code == 200:
-                data = res.json()
-                pages = data.get("query", {}).get("pages", {})
-                
-                for page_id, page_data in pages.items():
-                    # If page_id is "-1", the page doesn't exist
-                    if page_id != "-1" and "extract" in page_data:
-                        raw_text = page_data["extract"]
-                        
-                        # Process the raw text document
-                        lines = raw_text.split('\n')
-                        story_content = []
-                        
-                        for line in lines:
-                            # The API formats headers as "== Header Name =="
-                            if line.startswith("== ") and line.endswith(" =="):
-                                header_name = line.lower()
-                                stop_words = ['cast', 'trivia', 'gallery', 'references', 'production', 'credits', 'quotes', 'videos', 'notes']
-                                if any(stop in header_name for stop in stop_words):
-                                    break # We hit the end of the story
-                                
-                                # Format subheaders nicely for our display
-                                clean_header = line.replace("=", "").strip()
-                                story_content.append(f"### {clean_header}")
-                            elif line.strip():
-                                story_content.append(line.strip())
-                        
-                        if story_content:
-                            # Rebuild the final display URL
-                            final_title = page_data["title"].replace(" ", "_")
-                            page_url = f"https://{wiki_slug.lower()}.fandom.com/wiki/{urllib.parse.quote(final_title)}"
-                            return "\n\n".join(story_content), page_url
-        except Exception:
-            continue
+        parse_res = requests.get(api_url, params=parse_params, timeout=10).json()
+        html_text = parse_res.get("parse", {}).get("text", {}).get("*", "")
+        
+        if not html_text:
+            return None, None
             
+        # STEP 3: Parse the clean HTML (This preserves lists, but ignores sidebars!)
+        soup = BeautifulSoup(html_text, 'html.parser')
+        
+        start_node = None
+        story_keywords = ['plot', 'synopsis', 'summary', 'episode_summary']
+        
+        # Find the starting header
+        for header in soup.find_all(['h2', 'h3']):
+            h_text = header.get_text().lower()
+            h_id = header.get('id', '').lower()
+            inner_span = header.find('span')
+            span_id = inner_span.get('id', '').lower() if inner_span else ""
+            
+            if any(key in h_text or key in h_id or key in span_id for key in story_keywords):
+                start_node = header
+                break
+                
+        if start_node:
+            content = []
+            # Grab everything until the cast list
+            for sibling in start_node.find_next_siblings():
+                if sibling.name in ['h2', 'h3']:
+                    stop_words = ['cast', 'trivia', 'gallery', 'references', 'production', 'credits', 'quotes', 'videos']
+                    if any(stop in sibling.get_text().lower() for stop in stop_words):
+                        break
+                
+                # Crucial: We grab <p> AND <ul>/<ol> so the bullet points aren't lost
+                if sibling.name in ['p', 'ul', 'ol']:
+                    txt = sibling.get_text().strip()
+                    if txt:
+                        content.append(txt)
+            
+            if content:
+                return "\n\n".join(content), page_url
+                
+    except Exception as e:
+        pass
+        
     return None, None
 
 # --- UI ---
 st.title("📖 TV Vault Reader")
-st.caption("Powered by MediaWiki API")
+st.caption("Powered by 2-Step MediaWiki API")
 
 query = st.text_input("Search for a show:", placeholder="e.g. Invincible")
 
@@ -137,9 +156,9 @@ if query:
                                         st.markdown(f'<audio controls autoplay style="width:100%"><source src="data:audio/mp3;base64,{b64}" type="audio/mp3"></audio>', unsafe_allow_html=True)
 
                             st.markdown(f'<div class="lore-box">{raw_text}</div>', unsafe_allow_html=True)
-                            st.caption(f"Source: [Direct API Link]({found_url})")
+                            st.caption(f"Source: [Fandom Wiki]({found_url})")
                         else:
-                            st.error(f"Text not found. Fandom's database returned empty for {wiki_slug}.")
+                            st.error(f"Text not found. Ensure the episode exists on {wiki_slug}.fandom.com.")
                     else:
                         st.error("Episode name not found in the database.")
                 else:
