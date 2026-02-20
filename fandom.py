@@ -35,11 +35,10 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- THE 2-STEP API CRAWLER ---
+# --- THE 2-STEP API CRAWLER (Unchanged) ---
 def get_raw_lore(wiki_slug, ep_title):
     api_url = f"https://{wiki_slug.lower()}.fandom.com/api.php"
     
-    # STEP 1: Search for the exact page title
     search_params = {
         "action": "query",
         "list": "search",
@@ -57,7 +56,6 @@ def get_raw_lore(wiki_slug, ep_title):
         exact_title = search_results[0]["title"]
         page_url = f"https://{wiki_slug.lower()}.fandom.com/wiki/{urllib.parse.quote(exact_title.replace(' ', '_'))}"
         
-        # STEP 2: Ask for the pure HTML
         parse_params = {
             "action": "parse",
             "page": exact_title,
@@ -72,17 +70,14 @@ def get_raw_lore(wiki_slug, ep_title):
         if not html_text:
             return None, None
             
-        # STEP 3: Parse the clean HTML
         soup = BeautifulSoup(html_text, 'html.parser')
         
-        # Scrub out the annoying "[edit]" links that Fandom attaches to headers
         for edit_btn in soup.find_all('span', class_='mw-editsection'):
             edit_btn.decompose()
         
         start_node = None
         story_keywords = ['plot', 'synopsis', 'summary', 'episode_summary']
         
-        # Find the starting header
         for header in soup.find_all(['h2', 'h3']):
             h_text = header.get_text().lower()
             h_id = header.get('id', '').lower()
@@ -97,21 +92,17 @@ def get_raw_lore(wiki_slug, ep_title):
             content = []
             
             for sibling in start_node.find_next_siblings():
-                # If we hit an H2 or H3, we need to see if it's a stop word or a sub-heading we want to keep
                 if sibling.name in ['h2', 'h3', 'h4']:
                     h_text = sibling.get_text().strip()
                     h_text_lower = h_text.lower()
                     stop_words = ['cast', 'trivia', 'gallery', 'references', 'production', 'credits', 'quotes', 'videos']
                     
                     if any(stop in h_text_lower for stop in stop_words):
-                        break  # Stop scraping!
+                        break 
                     
-                    # If it's not a stop word, it's a story sub-heading (like "The Final Battle")
                     if h_text:
-                        # We format it with Markdown so it looks bold and separated
                         content.append(f"\n### {h_text}\n")
                 
-                # Grab the standard text and lists
                 elif sibling.name in ['p', 'ul', 'ol']:
                     txt = sibling.get_text().strip()
                     if txt:
@@ -125,7 +116,14 @@ def get_raw_lore(wiki_slug, ep_title):
         
     return None, None
 
-# --- UI ---
+# --- STATE INITIALIZATION ---
+if 'lore_text' not in st.session_state:
+    st.session_state.lore_text = None
+    st.session_state.ep_name = None
+    st.session_state.image_url = None
+    st.session_state.wiki_url = None
+
+# --- UI LOGIC ---
 st.title("📖 TV Vault Reader")
 st.caption("Powered by 2-Step MediaWiki API")
 
@@ -145,6 +143,7 @@ if query:
             with c1: s_val = st.number_input("Season", min_value=1, value=1)
             with c2: ep_val = st.number_input("Episode", min_value=1, value=1)
 
+            # Button 1: Fetch and save to memory
             if st.button("🔓 Extract Full Lore"):
                 api_url = f"https://api.tvmaze.com/shows/{show_data['id']}/episodebynumber?season={s_val}&number={ep_val}"
                 api_res = requests.get(api_url)
@@ -156,24 +155,38 @@ if query:
                         raw_text, found_url = get_raw_lore(wiki_slug, api_data['name'])
                         
                         if raw_text:
-                            st.subheader(api_data['name'])
-                            if api_data.get('image'): st.image(api_data['image']['medium'])
-                            
-                            if st.button("🔊 Play Audio"):
-                                with st.spinner("Synthesizing audio..."):
-                                    tts = gTTS(text=raw_text, lang='en')
-                                    tts.save("lore.mp3")
-                                    with open("lore.mp3", "rb") as f:
-                                        b64 = base64.b64encode(f.read()).decode()
-                                        st.markdown(f'<audio controls autoplay style="width:100%"><source src="data:audio/mp3;base64,{b64}" type="audio/mp3"></audio>', unsafe_allow_html=True)
-
-                            st.markdown(f'<div class="lore-box">{raw_text}</div>', unsafe_allow_html=True)
-                            st.caption(f"Source: [Fandom Wiki]({found_url})")
+                            # Save to session state so it survives the button click
+                            st.session_state.lore_text = raw_text
+                            st.session_state.ep_name = api_data['name']
+                            st.session_state.image_url = api_data.get('image', {}).get('medium')
+                            st.session_state.wiki_url = found_url
                         else:
                             st.error(f"Text not found. Ensure the episode exists on {wiki_slug}.fandom.com.")
+                            st.session_state.lore_text = None # Clear old data
                     else:
                         st.error("Episode name not found in the database.")
                 else:
                     st.error("Could not locate this specific episode number.")
+
+            # If we have lore saved in memory, display it
+            if st.session_state.lore_text:
+                st.write("---")
+                st.subheader(st.session_state.ep_name)
+                
+                if st.session_state.image_url:
+                    st.image(st.session_state.image_url)
+                
+                # Button 2: Now this works because the lore is saved in memory!
+                if st.button("🔊 Play Audio"):
+                    with st.spinner("Synthesizing audio..."):
+                        tts = gTTS(text=st.session_state.lore_text, lang='en')
+                        tts.save("lore.mp3")
+                        with open("lore.mp3", "rb") as f:
+                            b64 = base64.b64encode(f.read()).decode()
+                            st.markdown(f'<audio controls autoplay style="width:100%"><source src="data:audio/mp3;base64,{b64}" type="audio/mp3"></audio>', unsafe_allow_html=True)
+
+                st.markdown(f'<div class="lore-box">{st.session_state.lore_text}</div>', unsafe_allow_html=True)
+                st.caption(f"Source: [Fandom Wiki]({st.session_state.wiki_url})")
+
     except Exception as e:
         st.error(f"Error: {e}")
