@@ -16,7 +16,8 @@ WIKI_ALIASES = {
     "Invincible": "amazon-invincible",
     "The Incredible Hulk": "marvelcinematicuniverse",
     "X-Men '97": "xmen97",
-    "The Wheel of Time": "wot"
+    "The Wheel of Time": "wot",
+    "Gilmore Girls": "gilmoregirls"
 }
 
 # --- NEURAL TTS HELPER ---
@@ -89,17 +90,13 @@ def get_raw_lore(wiki_slug, ep_title):
     except Exception: pass
     return None, None
 
-# --- NEW: EPUB COMPILER ---
+# --- EPUB COMPILER WITH TVMAZE BACKUP ---
 def build_season_epub(show_id, show_name, season_num, wiki_slug):
-    """Fetches all episodes for a season and compiles them into an EPUB file."""
-    # 1. Get all episodes from TVMaze
     ep_data = requests.get(f"https://api.tvmaze.com/shows/{show_id}/episodes").json()
     season_episodes = [ep for ep in ep_data if ep['season'] == season_num]
     
-    if not season_episodes:
-        return None
+    if not season_episodes: return None
         
-    # 2. Initialize the EPUB Book
     book = epub.EpubBook()
     book.set_identifier(f"{show_name.replace(' ', '')}_S{season_num}")
     book.set_title(f"{show_name} - Season {season_num} Lore")
@@ -110,17 +107,18 @@ def build_season_epub(show_id, show_name, season_num, wiki_slug):
     progress_bar = st.progress(0)
     status_text = st.empty()
     
-    # 3. Loop through episodes and scrape
     for i, ep in enumerate(season_episodes):
         status_text.text(f"Scraping Episode {ep['number']}: {ep['name']}...")
+        
+        # 1. Try Fandom First
         raw_text, _ = get_raw_lore(wiki_slug, ep['name'])
         
-        if raw_text:
-            # Create a chapter
-            c = epub.EpubHtml(title=f"Episode {ep['number']}: {ep['name']}", 
-                              file_name=f"chap_{ep['number']}.xhtml", lang='en')
+        # 2. TVMaze Fallback
+        if not raw_text and ep.get('summary'):
+            raw_text = ep['summary']
             
-            # Add a clean title header inside the chapter text
+        if raw_text:
+            c = epub.EpubHtml(title=f"Episode {ep['number']}: {ep['name']}", file_name=f"chap_{ep['number']}.xhtml", lang='en')
             c.content = f"<h2>Episode {ep['number']}: {ep['name']}</h2>\n" + raw_text
             book.add_item(c)
             chapters.append(c)
@@ -132,17 +130,13 @@ def build_season_epub(show_id, show_name, season_num, wiki_slug):
         return None
         
     status_text.text("Binding EPUB file...")
-    
-    # 4. Finalize the book structure
     book.toc = tuple(chapters)
     book.add_item(epub.EpubNcx())
     book.add_item(epub.EpubNav())
     
-    # Basic CSS for nice e-reader formatting
     style = 'h2 { text-align: center; margin-bottom: 2em; } h3 { margin-top: 1.5em; } p { line-height: 1.6; text-align: justify; }'
     nav_css = epub.EpubItem(uid="style_nav", file_name="style/nav.css", media_type="text/css", content=style)
     book.add_item(nav_css)
-    
     book.spine = ['nav'] + chapters
     
     filename = f"{show_name.replace(' ', '_')}_Season_{season_num}.epub"
@@ -150,7 +144,6 @@ def build_season_epub(show_id, show_name, season_num, wiki_slug):
     
     status_text.empty()
     progress_bar.empty()
-    
     return filename
 
 # --- STATE INITIALIZATION ---
@@ -166,7 +159,6 @@ if 'lore_text' not in st.session_state:
     st.session_state.wiki_url = None
     st.session_state.b64_audio = None
 
-# --- NEXT EPISODE CALLBACK ---
 def load_next_episode():
     st.session_state.ep_val += 1
     st.session_state.auto_fetch = True
@@ -191,7 +183,7 @@ if query:
             with c1: st.number_input("Season", min_value=1, key="s_val")
             with c2: st.number_input("Episode", min_value=1, key="ep_val")
 
-            # --- THE EPUB COMPILER TRIGGER ---
+            # --- EPUB EXPORT ---
             if st.button(f"📚 Export Season {st.session_state.s_val} as EPUB", use_container_width=True):
                 compiled_file = build_season_epub(show_data['id'], show_data['name'], st.session_state.s_val, wiki_slug)
                 if compiled_file:
@@ -200,20 +192,13 @@ if query:
                 else:
                     st.error("Could not compile season. No lore found.")
             
-            # Render the download button if a file was successfully generated
             if st.session_state.epub_ready and os.path.exists(st.session_state.epub_ready):
                 with open(st.session_state.epub_ready, "rb") as file:
-                    st.download_button(
-                        label="⬇️ Download Your EPUB Book",
-                        data=file,
-                        file_name=st.session_state.epub_ready,
-                        mime="application/epub+zip",
-                        use_container_width=True
-                    )
+                    st.download_button(label="⬇️ Download Your EPUB Book", data=file, file_name=st.session_state.epub_ready, mime="application/epub+zip", use_container_width=True)
 
             st.divider()
 
-            # --- INDIVIDUAL EPISODE READER ---
+            # --- READER EXTRACTION WITH BACKUP ---
             if st.button("🔓 Read Single Episode", use_container_width=True) or st.session_state.auto_fetch:
                 st.session_state.auto_fetch = False
                 
@@ -223,16 +208,26 @@ if query:
                 if api_res.status_code == 200:
                     api_data = api_res.json()
                     if "name" in api_data:
+                        # 1. Try Fandom
                         raw_text, found_url = get_raw_lore(wiki_slug, api_data['name'])
+                        
                         if raw_text:
                             st.session_state.lore_text = raw_text
+                            st.session_state.wiki_url = found_url
+                        # 2. TVMaze Fallback
+                        elif api_data.get('summary'):
+                            st.session_state.lore_text = api_data['summary']
+                            st.session_state.wiki_url = api_data.get('url', 'https://www.tvmaze.com')
+                            st.toast("Fandom wiki was empty. Loaded TVMaze summary instead!", icon="ℹ️")
+                        else:
+                            st.session_state.lore_text = None
+                            st.error(f"No plot summary found on Fandom or TVMaze.")
+                            
+                        if st.session_state.lore_text:
                             st.session_state.ep_name = api_data['name']
                             st.session_state.image_url = api_data.get('image', {}).get('original')
-                            st.session_state.wiki_url = found_url
                             st.session_state.b64_audio = None 
-                        else:
-                            st.error(f"Text not found. Ensure the episode exists on {wiki_slug}.fandom.com.")
-                            st.session_state.lore_text = None
+
                     else: st.error("Episode name not found.")
                 else: 
                     st.warning("You may have reached the end of the season! Adjust the Season tracker above.")
@@ -244,13 +239,8 @@ if query:
                     rc1, rc2 = st.columns([1, 2])
                     theme = rc1.selectbox("Theme", ["Dark", "Sepia", "Light"])
                     voice_setting = rc2.selectbox("Narrator Voice", [
-                        "Christopher (Deep, Cinematic)", 
-                        "Aria (Clear, Professional)", 
-                        "Guy (Casual, Conversational)",
-                        "Jenny (Friendly, Upbeat)",
-                        "Steffan (Authoritative, Clear)",
-                        "Ryan (British, Sophisticated)",
-                        "Natasha (Australian, Smooth)"
+                        "Christopher (Deep, Cinematic)", "Aria (Clear, Professional)", "Guy (Casual, Conversational)",
+                        "Jenny (Friendly, Upbeat)", "Steffan (Authoritative, Clear)", "Ryan (British, Sophisticated)", "Natasha (Australian, Smooth)"
                     ])
                 
                 theme_styles = {
@@ -262,24 +252,13 @@ if query:
 
                 st.markdown(f"""
                     <style>
-                    .pro-reader {{
-                        background-color: {current_theme['bg']};
-                        color: {current_theme['text']};
-                        font-family: sans-serif;
-                        font-size: 1.15rem;
-                        line-height: 1.8;
-                        padding: 30px 25px;
-                        border-radius: 12px;
-                        margin-top: 15px;
-                    }}
+                    .pro-reader {{ background-color: {current_theme['bg']}; color: {current_theme['text']}; font-family: sans-serif; font-size: 1.15rem; line-height: 1.8; padding: 30px 25px; border-radius: 12px; margin-top: 15px; }}
                     .pro-reader h3 {{ color: {current_theme['accent']}; margin-top: 1.5em; }}
                     </style>
                 """, unsafe_allow_html=True)
 
                 st.subheader(f"S{st.session_state.s_val}E{st.session_state.ep_val}: {st.session_state.ep_name}")
-                
-                if st.session_state.image_url:
-                    st.image(st.session_state.image_url, use_container_width=True)
+                if st.session_state.image_url: st.image(st.session_state.image_url, use_container_width=True)
                 
                 if st.button("🔊 Generate Audio Narration", use_container_width=True):
                     with st.spinner(f"Synthesizing {voice_setting.split(' ')[0]}'s voice..."):
@@ -292,21 +271,12 @@ if query:
                     realtime_player_html = f"""
                     <!DOCTYPE html>
                     <html>
-                    <head>
-                    <style>
-                        body {{ margin: 0; padding: 0; background-color: transparent; }}
-                        .player-box {{ background-color: {current_theme['player']}; padding: 15px; border-radius: 10px; border-left: 4px solid {current_theme['accent']}; font-family: sans-serif; color: {current_theme['text']}; }}
-                    </style>
-                    </head>
+                    <head><style>body {{ margin: 0; padding: 0; background-color: transparent; }} .player-box {{ background-color: {current_theme['player']}; padding: 15px; border-radius: 10px; border-left: 4px solid {current_theme['accent']}; font-family: sans-serif; color: {current_theme['text']}; }}</style></head>
                     <body>
                         <div class="player-box">
-                            <audio id="narrator-audio" controls autoplay style="width: 100%;">
-                                <source src="data:audio/mp3;base64,{st.session_state.b64_audio}" type="audio/mp3">
-                            </audio>
+                            <audio id="narrator-audio" controls autoplay style="width: 100%;"><source src="data:audio/mp3;base64,{st.session_state.b64_audio}" type="audio/mp3"></audio>
                             <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 12px;">
-                                <label for="speed-slider" style="font-size: 0.95rem; font-weight: 500;">
-                                    🏃 Playback Speed: <span id="speed-display">1.0x</span>
-                                </label>
+                                <label for="speed-slider" style="font-size: 0.95rem; font-weight: 500;">🏃 Playback Speed: <span id="speed-display">1.0x</span></label>
                                 <input type="range" id="speed-slider" min="0.5" max="2.0" step="0.1" value="1.0" style="width: 50%; cursor: pointer;">
                             </div>
                         </div>
@@ -314,10 +284,7 @@ if query:
                             const audio = document.getElementById("narrator-audio");
                             const slider = document.getElementById("speed-slider");
                             const display = document.getElementById("speed-display");
-                            slider.addEventListener("input", function() {{
-                                audio.playbackRate = this.value;
-                                display.textContent = parseFloat(this.value).toFixed(1) + "x";
-                            }});
+                            slider.addEventListener("input", function() {{ audio.playbackRate = this.value; display.textContent = parseFloat(this.value).toFixed(1) + "x"; }});
                         </script>
                     </body>
                     </html>
@@ -325,7 +292,7 @@ if query:
                     components.html(realtime_player_html, height=120)
 
                 st.markdown(f'<div class="pro-reader">{st.session_state.lore_text}</div>', unsafe_allow_html=True)
-                st.caption(f"Source: [Fandom Wiki]({st.session_state.wiki_url})")
+                st.caption(f"Source: [Link]({st.session_state.wiki_url})")
                 
                 st.divider()
                 st.button(f"⏭️ Load Season {st.session_state.s_val}, Episode {st.session_state.ep_val + 1}", on_click=load_next_episode, use_container_width=True)
