@@ -158,8 +158,15 @@ if query:
                             model="llama-3.3-70b-versatile",
                         )
                         st.write(chat.choices[0].message.content)
+                       
+                    # --- DEBUG SECTION ---
+                    with st.expander("🛠️ System Debug Log"):
+                        st.write(f"**Target Fandom URL:** {st.session_state.debug_url}")
+                        st.write("**Data Found:**" if fandom_lore else "**Fandom Data:** Not Found (Using AI internal knowledge only)")
+                        
     except Exception as e:
         st.error(f"Error: {e}")
 else:
     st.info("Search a show to begin!")
+
 
