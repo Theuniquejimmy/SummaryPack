@@ -1,6 +1,7 @@
 import streamlit as st
 import requests
 import re
+import urllib.parse
 from bs4 import BeautifulSoup
 from gtts import gTTS
 import base64
@@ -35,14 +36,16 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- THE HEADERLESS HUNTER ---
+# --- THE DOCUMENT ORDER SCANNER ---
 def get_raw_lore(wiki_slug, ep_title):
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
     
+    # FIX 1: Safely encode apostrophes and special characters for Fandom URLs
+    base_title = ep_title.replace(" ", "_")
     patterns = [
-        ep_title.replace(" ", "_"),
-        ep_title.replace(" ", "_") + "_(episode)",
-        ep_title.title().replace(" ", "_")
+        urllib.parse.quote(base_title),
+        urllib.parse.quote(base_title + "_(episode)"),
+        urllib.parse.quote(ep_title.title().replace(" ", "_"))
     ]
     
     for p in patterns:
@@ -51,27 +54,31 @@ def get_raw_lore(wiki_slug, ep_title):
             res = requests.get(url, headers=headers, timeout=10)
             if res.status_code == 200:
                 soup = BeautifulSoup(res.text, 'html.parser')
-                
-                # Find the main body container of the Fandom page
                 content_div = soup.find('div', class_='mw-parser-output')
-                if not content_div:
+                
+                if not content_div: 
                     continue
-                    
+                
                 content = []
-                # Iterate through EVERYTHING top-to-bottom
-                for child in content_div.children:
-                    # If we hit a major header, check if it means the story is over
-                    if child.name in ['h2', 'h3']:
-                        h_text = child.get_text().lower()
-                        stop_words = ['cast', 'trivia', 'gallery', 'references', 'production', 'credits', 'quotes', 'videos']
-                        if any(stop in h_text for stop in stop_words):
-                            break # Stop scraping!
+                # FIX 2: Scan the entire document sequentially
+                for tag in content_div.find_all(['h2', 'h3', 'p', 'ul', 'ol']):
                     
-                    # Scoop up paragraphs and bulleted lists
-                    if child.name in ['p', 'ul', 'ol']:
-                        txt = child.get_text().strip()
-                        # Ignore tiny empty formatting artifacts
-                        if len(txt) > 10:
+                    # IGNORE the right-hand sidebar/infobox and table of contents
+                    if tag.find_parent('aside') or tag.find_parent('table') or tag.find_parent('nav') or tag.get('id') == 'toc':
+                        continue
+                    
+                    # Check for STOP headers
+                    if tag.name in ['h2', 'h3']:
+                        h_text = tag.get_text().lower()
+                        stop_words = ['cast', 'trivia', 'gallery', 'references', 'production', 'credits', 'quotes', 'videos', 'notes']
+                        if any(stop in h_text for stop in stop_words):
+                            break # We hit the end of the story, stop entirely
+                    
+                    # Collect the actual text
+                    elif tag.name in ['p', 'ul', 'ol']:
+                        txt = tag.get_text().strip()
+                        # Filter out tiny blank artifacts or spacing issues
+                        if len(txt) > 25:
                             content.append(txt)
                 
                 if content:
