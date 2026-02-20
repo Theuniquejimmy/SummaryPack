@@ -135,7 +135,7 @@ if query:
 
                             Character Table: Include a Markdown table with three columns: Character, Role, and Vibe to summarize the supporting cast.
         
-                            Notable Moments: List 3-4 'must-know' episodes or chapters using a numbered list.
+                            Notable Moments: List 'must-know' plot pointa for every episodes or chapters using a numbered list.
 
                             Formatting Toolkit: Use horizontal rules (---) to separate sections, bold key terms to make the text scannable, and avoid dense walls of text.
     
@@ -173,6 +173,7 @@ if query:
         st.error(f"App Error: {e}")
 else:
     st.info("Enter a show title to begin.")
+
 
 
 
