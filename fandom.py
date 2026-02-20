@@ -17,26 +17,25 @@ WIKI_ALIASES = {
 }
 
 # --- NEURAL TTS HELPER ---
-async def generate_neural_audio(text, voice, rate_str, filename="lore.mp3"):
-    # edge-tts accepts rate as a percentage string like "+20%" or "-10%"
-    communicate = edge_tts.Communicate(text, voice, rate=rate_str)
+async def generate_neural_audio(text, voice, filename="lore.mp3"):
+    communicate = edge_tts.Communicate(text, voice)
     await communicate.save(filename)
 
-def create_audio(text, voice_choice, speed_multiplier):
+def create_audio(text, voice_choice):
     voice_map = {
         "Christopher (Deep, Cinematic)": "en-US-ChristopherNeural",
         "Aria (Clear, Professional)": "en-US-AriaNeural",
-        "Guy (Casual, Conversational)": "en-US-GuyNeural"
+        "Guy (Casual, Conversational)": "en-US-GuyNeural",
+        "Jenny (Friendly, Upbeat)": "en-US-JennyNeural",
+        "Steffan (Authoritative, Clear)": "en-US-SteffanNeural",
+        "Ryan (British, Sophisticated)": "en-GB-RyanNeural",
+        "Natasha (Australian, Smooth)": "en-AU-NatashaNeural"
     }
     selected_voice = voice_map.get(voice_choice, "en-US-ChristopherNeural")
     
-    # Convert slider multiplier (e.g., 1.5) to a percentage string (e.g., "+50%")
-    rate_pct = int((speed_multiplier - 1.0) * 100)
-    rate_str = f"{rate_pct:+d}%"
-    
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    loop.run_until_complete(generate_neural_audio(text, selected_voice, rate_str))
+    loop.run_until_complete(generate_neural_audio(text, selected_voice))
 
 # --- THE 2-STEP API CRAWLER ---
 def get_raw_lore(wiki_slug, ep_title):
@@ -89,12 +88,25 @@ def get_raw_lore(wiki_slug, ep_title):
     return None, None
 
 # --- STATE INITIALIZATION ---
+# We initialize season and episode numbers into memory so we can control them programmatically
+if 's_val' not in st.session_state: st.session_state.s_val = 1
+if 'ep_val' not in st.session_state: st.session_state.ep_val = 1
+if 'auto_fetch' not in st.session_state: st.session_state.auto_fetch = False
+
 if 'lore_text' not in st.session_state:
     st.session_state.lore_text = None
     st.session_state.ep_name = None
     st.session_state.image_url = None
     st.session_state.wiki_url = None
     st.session_state.b64_audio = None
+
+# --- NEXT EPISODE CALLBACK ---
+def load_next_episode():
+    """This runs instantly when the Next Episode button is clicked."""
+    st.session_state.ep_val += 1
+    st.session_state.auto_fetch = True  # Triggers the extraction block
+    st.session_state.lore_text = None   # Clear old text
+    st.session_state.b64_audio = None   # Clear old audio
 
 # --- UI LOGIC ---
 st.title("📖 TV Vault Reader")
@@ -111,11 +123,15 @@ if query:
             wiki_slug = WIKI_ALIASES.get(show_data['name'], show_data['name'].replace(" ", "").lower())
             
             c1, c2 = st.columns(2)
-            with c1: s_val = st.number_input("Season", min_value=1, value=1)
-            with c2: ep_val = st.number_input("Episode", min_value=1, value=1)
+            # By tying these to "key", Streamlit automatically updates them when we change the session state
+            with c1: st.number_input("Season", min_value=1, key="s_val")
+            with c2: st.number_input("Episode", min_value=1, key="ep_val")
 
-            if st.button("🔓 Extract Full Lore", use_container_width=True):
-                api_url = f"https://api.tvmaze.com/shows/{show_data['id']}/episodebynumber?season={s_val}&number={ep_val}"
+            # Trigger condition: Either you clicked the button, OR the Next Episode callback told it to fetch
+            if st.button("🔓 Extract Full Lore", use_container_width=True) or st.session_state.auto_fetch:
+                st.session_state.auto_fetch = False # Immediately reset the trigger
+                
+                api_url = f"https://api.tvmaze.com/shows/{show_data['id']}/episodebynumber?season={st.session_state.s_val}&number={st.session_state.ep_val}"
                 api_res = requests.get(api_url)
                 
                 if api_res.status_code == 200:
@@ -127,28 +143,35 @@ if query:
                             st.session_state.ep_name = api_data['name']
                             st.session_state.image_url = api_data.get('image', {}).get('original')
                             st.session_state.wiki_url = found_url
-                            st.session_state.b64_audio = None # Clear old audio
+                            st.session_state.b64_audio = None 
                         else:
                             st.error(f"Text not found. Ensure the episode exists on {wiki_slug}.fandom.com.")
                             st.session_state.lore_text = None
                     else: st.error("Episode name not found.")
-                else: st.error("Could not locate this specific episode number.")
+                else: 
+                    st.warning("You may have reached the end of the season! Adjust the Season tracker above.")
 
             # --- THE PRO READER UI ---
             if st.session_state.lore_text:
                 st.divider()
                 
-                # Reader Settings Dashboard
                 with st.expander("⚙️ Reader Settings", expanded=False):
-                    rc1, rc2, rc3 = st.columns([1, 1, 1.5])
+                    rc1, rc2 = st.columns([1, 2])
                     theme = rc1.selectbox("Theme", ["Dark", "Sepia", "Light"])
-                    speaker_speed = rc2.slider("Speaker Speed", min_value=0.5, max_value=2.0, value=1.0, step=0.1)
-                    voice_setting = rc3.selectbox("Narrator Voice", ["Christopher (Deep, Cinematic)", "Aria (Clear, Professional)", "Guy (Casual, Conversational)"])
+                    voice_setting = rc2.selectbox("Narrator Voice", [
+                        "Christopher (Deep, Cinematic)", 
+                        "Aria (Clear, Professional)", 
+                        "Guy (Casual, Conversational)",
+                        "Jenny (Friendly, Upbeat)",
+                        "Steffan (Authoritative, Clear)",
+                        "Ryan (British, Sophisticated)",
+                        "Natasha (Australian, Smooth)"
+                    ])
                 
                 theme_styles = {
-                    "Dark": {"bg": "#121212", "text": "#e0e0e0", "accent": "#3b82f6"},
-                    "Sepia": {"bg": "#f4ecd8", "text": "#433422", "accent": "#8b5a2b"},
-                    "Light": {"bg": "#ffffff", "text": "#333333", "accent": "#2563eb"}
+                    "Dark": {"bg": "#121212", "text": "#e0e0e0", "accent": "#3b82f6", "player": "#1e1e1e"},
+                    "Sepia": {"bg": "#f4ecd8", "text": "#433422", "accent": "#8b5a2b", "player": "#e8dfc8"},
+                    "Light": {"bg": "#ffffff", "text": "#333333", "accent": "#2563eb", "player": "#f3f4f6"}
                 }
                 current_theme = theme_styles[theme]
 
@@ -168,26 +191,51 @@ if query:
                     </style>
                 """, unsafe_allow_html=True)
 
-                st.subheader(st.session_state.ep_name)
+                st.subheader(f"S{st.session_state.s_val}E{st.session_state.ep_val}: {st.session_state.ep_name}")
                 
                 if st.session_state.image_url:
                     st.image(st.session_state.image_url, use_container_width=True)
                 
-                # Independent Audio Generation Button
                 if st.button("🔊 Generate Audio Narration", use_container_width=True):
-                    with st.spinner("Synthesizing neural audio..."):
+                    with st.spinner(f"Synthesizing {voice_setting.split(' ')[0]}'s voice..."):
                         clean_tts_text = BeautifulSoup(st.session_state.lore_text, "html.parser").get_text(separator=' ')
-                        create_audio(clean_tts_text, voice_setting, speaker_speed)
+                        create_audio(clean_tts_text, voice_setting)
                         with open("lore.mp3", "rb") as f:
                             st.session_state.b64_audio = base64.b64encode(f.read()).decode()
 
-                # Display Audio Player if it exists in memory
                 if st.session_state.b64_audio:
-                    st.markdown(f'<audio controls autoplay style="width:100%; margin-top: 15px;"><source src="data:audio/mp3;base64,{st.session_state.b64_audio}" type="audio/mp3"></audio>', unsafe_allow_html=True)
+                    realtime_player_html = f"""
+                    <div style="background-color: {current_theme['player']}; padding: 15px; border-radius: 10px; margin-top: 15px; border-left: 4px solid {current_theme['accent']};">
+                        <audio id="narrator-audio" controls autoplay style="width: 100%;">
+                            <source src="data:audio/mp3;base64,{st.session_state.b64_audio}" type="audio/mp3">
+                        </audio>
+                        <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 12px; color: {current_theme['text']}; font-family: sans-serif;">
+                            <label for="speed-slider" style="font-size: 0.95rem; font-weight: 500;">
+                                🏃 Playback Speed: <span id="speed-display">1.0x</span>
+                            </label>
+                            <input type="range" id="speed-slider" min="0.5" max="2.0" step="0.1" value="1.0" style="width: 50%; cursor: pointer;">
+                        </div>
+                    </div>
+                    
+                    <script>
+                        const audio = document.getElementById("narrator-audio");
+                        const slider = document.getElementById("speed-slider");
+                        const display = document.getElementById("speed-display");
+                        
+                        slider.addEventListener("input", function() {{
+                            audio.playbackRate = this.value;
+                            display.textContent = parseFloat(this.value).toFixed(1) + "x";
+                        }});
+                    </script>
+                    """
+                    st.markdown(realtime_player_html, unsafe_allow_html=True)
 
-                # The Text ALWAYS displays immediately below
                 st.markdown(f'<div class="pro-reader">{st.session_state.lore_text}</div>', unsafe_allow_html=True)
                 st.caption(f"Source: [Fandom Wiki]({st.session_state.wiki_url})")
+                
+                # --- NEXT EPISODE BUTTON ---
+                st.divider()
+                st.button(f"⏭️ Load Season {st.session_state.s_val}, Episode {st.session_state.ep_val + 1}", on_click=load_next_episode, use_container_width=True)
 
     except Exception as e:
         st.error(f"System Error: {e}")
