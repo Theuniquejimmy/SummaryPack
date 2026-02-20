@@ -125,7 +125,7 @@ if query:
                             3. Be expansive and detailed.
                             4. No bolding.
                             5. Identify at least TWO important plot point for every episode of the season so, if season has 25 epsiodes 50 plot points at least and write them with great detail that if you havn't seen the episode you'd know the main plot. Cite each with episode tag its from "S*E*" and list them in order of episode.
-                            6. do not skip episodes, every episode should include a plot point.
+                            6. do not skip episodes, every episode should include a plot point. make a bullet point list.
                             7. What I need to know for next season.
 
                             """
@@ -148,5 +148,6 @@ if query:
     except Exception as e: st.error(f"Error: {e}")
 else:
     st.info("Search a show to begin your deep-dive.")
+
 
 
