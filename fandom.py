@@ -11,8 +11,7 @@ st.set_page_config(page_title="TV Vault Reader", page_icon="📖", layout="cente
 WIKI_ALIASES = {
     "Invincible": "amazon-invincible",
     "The Incredible Hulk": "marvelcinematicuniverse",
-    "X-Men '97": "xmen97",
-    "The Wheel of Time": "wot"
+    "X-Men '97": "xmen97"
 }
 
 st.markdown("""
@@ -35,16 +34,15 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- SCRAPER LOGIC ---
+# --- THE "GREEDY" CRAWLER ---
 def get_raw_lore(wiki_slug, ep_title):
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
     
-    # We try every naming pattern Fandom uses
+    # Common Fandom URL patterns
     patterns = [
-        ep_title.replace(" ", "_"),                             # "Here_Goes_Nothing"
-        ep_title.replace(" ", "_") + "_(episode)",               # "Here_Goes_Nothing_(episode)"
-        ep_title.title().replace(" ", "_"),                      # "Here_Goes_Nothing" (Title Case)
-        ep_title.title().replace(" ", "_") + "_(episode)"        # "Here_Goes_Nothing_(episode)" (Title Case)
+        ep_title.replace(" ", "_"),
+        ep_title.replace(" ", "_") + "_(episode)",
+        ep_title.title().replace(" ", "_")
     ]
     
     for p in patterns:
@@ -53,17 +51,24 @@ def get_raw_lore(wiki_slug, ep_title):
             res = requests.get(url, headers=headers, timeout=10)
             if res.status_code == 200:
                 soup = BeautifulSoup(res.text, 'html.parser')
-                # Hunt for the Plot start
-                start = soup.find('span', id=lambda x: x and x in ['Synopsis', 'Summary', 'Plot', 'Episode_Summary'])
                 
-                if start:
+                # FLEXIBLE SEARCH: Look for Plot, Synopsis, or Summary
+                # We check for the span ID inside the headers
+                start_node = soup.find('span', id=lambda x: x and x.lower() in ['plot', 'synopsis', 'summary', 'episode_summary'])
+                
+                if start_node:
                     content = []
-                    # Greedy loop: Capture every paragraph/list until a non-story section
-                    for sibling in start.find_parent().find_next_siblings():
+                    # Move to the parent (h2/h3) and start collecting siblings
+                    current = start_node.find_parent()
+                    
+                    for sibling in current.find_next_siblings():
+                        # STOP when we hit a non-story section
                         if sibling.name in ['h2', 'h3']:
                             h_text = sibling.get_text().lower()
-                            if any(stop in h_text for stop in ['cast', 'trivia', 'gallery', 'references', 'production', 'credits']):
+                            if any(stop in h_text for stop in ['cast', 'trivia', 'gallery', 'references', 'production']):
                                 break
+                        
+                        # Collect all story text (paragraphs and lists)
                         if sibling.name in ['p', 'ul', 'ol']:
                             txt = sibling.get_text().strip()
                             if txt: content.append(txt)
@@ -87,6 +92,7 @@ if query:
             label = st.selectbox("Select Result:", options=list(show_options.keys()))
             show_data = show_options[label]
             
+            # Use Aliases (Amazon-Invincible) or clean the TVmaze name
             wiki_slug = WIKI_ALIASES.get(show_data['name'], show_data['name'].replace(" ", "").lower())
             
             c1, c2 = st.columns(2)
@@ -94,31 +100,31 @@ if query:
             with c2: ep_val = st.number_input("Episode", min_value=1, value=1)
 
             if st.button("🔓 Extract Raw Lore"):
-                ep_url = f"https://api.tvmaze.com/shows/{show_data['id']}/episodebynumber?season={s_val}&number={ep_val}"
-                api_res = requests.get(ep_url)
+                # Get the Episode Title from TVmaze
+                api_url = f"https://api.tvmaze.com/shows/{show_data['id']}/episodebynumber?season={s_val}&number={ep_val}"
+                api_res = requests.get(api_url).json()
                 
-                if api_res.status_code == 200:
-                    api_data = api_res.json()
-                    raw_text, found_url = get_raw_lore(wiki_slug, api_data['name'])
+                if "name" in api_res:
+                    raw_text, found_url = get_raw_lore(wiki_slug, api_res['name'])
                     
                     if raw_text:
-                        st.subheader(api_data['name'])
-                        if api_data.get('image'): st.image(api_data['image']['medium'])
+                        st.subheader(api_res['name'])
+                        if api_res.get('image'): st.image(api_res['image']['medium'])
                         
-                        # TTS Section
-                        if st.button("🔊 Narrate Raw Text"):
+                        # TTS Execution
+                        if st.button("🔊 Narrate Raw Plot"):
                             tts = gTTS(text=raw_text, lang='en')
                             tts.save("lore.mp3")
                             with open("lore.mp3", "rb") as f:
                                 b64 = base64.b64encode(f.read()).decode()
                                 st.markdown(f'<audio controls autoplay style="width:100%"><source src="data:audio/mp3;base64,{b64}" type="audio/mp3"></audio>', unsafe_allow_html=True)
 
-                        # Display Section
+                        # Raw Display
                         st.markdown(f'<div class="lore-box">{raw_text}</div>', unsafe_allow_html=True)
-                        st.caption(f"Full text pulled from: {found_url}")
+                        st.caption(f"Source: {found_url}")
                     else:
-                        st.error(f"Lore not found at {wiki_slug}.fandom.com. The page might use a different name.")
+                        st.error(f"Section not found. The Wiki might use a non-standard header.")
                 else:
-                    st.error("Could not find this episode in the TVmaze database.")
+                    st.error("Episode name not found in database.")
     except Exception as e:
-        st.error(f"System Error: {e}")
+        st.error(f"Error: {e}")
