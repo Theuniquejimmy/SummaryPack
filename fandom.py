@@ -11,7 +11,8 @@ st.set_page_config(page_title="TV Vault Reader", page_icon="📖", layout="cente
 WIKI_ALIASES = {
     "Invincible": "amazon-invincible",
     "The Incredible Hulk": "marvelcinematicuniverse",
-    "X-Men '97": "xmen97"
+    "X-Men '97": "xmen97",
+    "The Wheel of Time": "wot"
 }
 
 st.markdown("""
@@ -34,7 +35,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- THE STRUCTURAL HUNTER ---
+# --- THE HEADERLESS HUNTER ---
 def get_raw_lore(wiki_slug, ep_title):
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
     
@@ -51,39 +52,30 @@ def get_raw_lore(wiki_slug, ep_title):
             if res.status_code == 200:
                 soup = BeautifulSoup(res.text, 'html.parser')
                 
-                # SEARCH STRATEGY: Find ANY header (h2 or h3) that contains story keywords
-                story_keywords = ['plot', 'synopsis', 'summary', 'the_story', 'episode_summary']
-                start_node = None
-                
-                # Check <h2> and <h3> tags for the keywords in their text or ID
-                for header in soup.find_all(['h2', 'h3']):
-                    header_text = header.get_text().lower()
-                    header_id = header.get('id', '').lower()
+                # Find the main body container of the Fandom page
+                content_div = soup.find('div', class_='mw-parser-output')
+                if not content_div:
+                    continue
                     
-                    # Also check for <span> tags inside the header (common Fandom structure)
-                    inner_span = header.find('span')
-                    span_id = inner_span.get('id', '').lower() if inner_span else ""
-
-                    if any(key in header_text or key in header_id or key in span_id for key in story_keywords):
-                        start_node = header
-                        break
-                
-                if start_node:
-                    content = []
-                    # Greedy loop: Capture every paragraph/list item until a "Stop" header
-                    for sibling in start_node.find_next_siblings():
-                        # Stop if we hit a new major section that isn't story-related
-                        if sibling.name in ['h2', 'h3']:
-                            h_text = sibling.get_text().lower()
-                            if any(stop in h_text for stop in ['cast', 'trivia', 'gallery', 'references', 'production', 'credits', 'external']):
-                                break
-                        
-                        if sibling.name in ['p', 'ul', 'ol']:
-                            txt = sibling.get_text().strip()
-                            if txt: content.append(txt)
+                content = []
+                # Iterate through EVERYTHING top-to-bottom
+                for child in content_div.children:
+                    # If we hit a major header, check if it means the story is over
+                    if child.name in ['h2', 'h3']:
+                        h_text = child.get_text().lower()
+                        stop_words = ['cast', 'trivia', 'gallery', 'references', 'production', 'credits', 'quotes', 'videos']
+                        if any(stop in h_text for stop in stop_words):
+                            break # Stop scraping!
                     
-                    if content:
-                        return "\n\n".join(content), url
+                    # Scoop up paragraphs and bulleted lists
+                    if child.name in ['p', 'ul', 'ol']:
+                        txt = child.get_text().strip()
+                        # Ignore tiny empty formatting artifacts
+                        if len(txt) > 10:
+                            content.append(txt)
+                
+                if content:
+                    return "\n\n".join(content), url
         except Exception:
             continue
             
@@ -119,7 +111,7 @@ if query:
                         st.subheader(api_res['name'])
                         if api_res.get('image'): st.image(api_res['image']['medium'])
                         
-                        if st.button("🔊 Play Narration"):
+                        if st.button("🔊 Play Audio"):
                             tts = gTTS(text=raw_text, lang='en')
                             tts.save("lore.mp3")
                             with open("lore.mp3", "rb") as f:
@@ -129,7 +121,7 @@ if query:
                         st.markdown(f'<div class="lore-box">{raw_text}</div>', unsafe_allow_html=True)
                         st.caption(f"Source: {found_url}")
                     else:
-                        st.error("Story section not found. The page layout might be non-standard.")
+                        st.error("Story section not found. The page layout might be entirely blank or blocked.")
                 else:
                     st.error("Episode not found in database.")
     except Exception as e:
