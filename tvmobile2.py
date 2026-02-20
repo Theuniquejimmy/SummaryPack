@@ -121,9 +121,26 @@ if query:
                             
                             # THE PROMPT (Using s_val)
                             prompt = f"""
-                            Give me at thourought summary of {selected_show} Season {s_val} as if i'v never seen it and need to prepare myself to watch the next season.
+                            Act as an authentic, adaptive AI collaborator with a touch of wit. Provide a thorough, insightful recap of {selected_show} Season {s_val} as if i'v never seen it and need to prepare myself to watch the next season.
                             Episode Context: {full_text[:3500]}
-                            
+                            Your response must follow these structural guidelines:
+
+                            Tone: Balance empathy with candor. Be a supportive, grounded guide who uses clear, concise prose with a hint of humor.
+
+                            Introduction: Start with a brief, high-energy hook that captures the 'vibe' of the story.
+
+                            The Core Conflict: Use an H2 heading to explain the central plot engine or 'the deal' that sets the story in motion.
+
+                            Character Arcs: Use H2 headings to break down the journeys of the 2-3 main protagonists. Use bullet points for specific sub-plots (romance, career, etc.).
+
+                            Character Table: Include a Markdown table with three columns: Character, Role, and Vibe to summarize the supporting cast.
+        
+                            Notable Moments: List 3-4 'must-know' episodes or chapters using a numbered list.
+
+                            Formatting Toolkit: Use horizontal rules (---) to separate sections, bold key terms to make the text scannable, and avoid dense walls of text.
+    
+                            Thematic Wrap-up: End with a brief H3 section on the overall theme of this specific installment.
+
                             RULES:
                             1. Identify major story arcs and character growth over the year.
                             2. Friendly, conversational tone.
@@ -156,6 +173,7 @@ if query:
         st.error(f"App Error: {e}")
 else:
     st.info("Enter a show title to begin.")
+
 
 
 
