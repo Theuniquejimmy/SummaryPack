@@ -132,10 +132,8 @@ if query:
                             The Core Conflict: Use an H2 heading to explain the central plot engine or 'the deal' that sets the story in motion.
 
                             Character Arcs: Use H2 headings to break down the journeys of the 2-3 main protagonists. Use bullet points for specific sub-plots (romance, career, etc.).
-
-                            Character Table: Include a Markdown table with three columns: Character, Role, and Vibe to summarize the supporting cast.
         
-                            Notable Moments: List 'must-know' plot pointa for every episodes or chapters using a numbered list.
+                            Notable Moments: List 'must-know' plot points for every episodes or chapters using a numbered list.
 
                             Formatting Toolkit: Use horizontal rules (---) to separate sections, bold key terms to make the text scannable, and avoid dense walls of text.
     
@@ -149,6 +147,7 @@ if query:
                             5. Identify at least TWO important plot point for every episode of the season so, if season has 25 epsiodes 50 plot points at least and write them with great detail that if you havn't seen the episode you'd know the main plot. Cite each with episode tag its from "S*E*" and list them in order of episode.
                             6. End with a thourough summary of the season hitting the most important plot points. 
                             7. What I need to know for next season.
+                            8. Don't skip episodes when giving summaries.
                             """
                         else:
                             st.error(f"Season {s_val} not found.")
@@ -173,6 +172,7 @@ if query:
         st.error(f"App Error: {e}")
 else:
     st.info("Enter a show title to begin.")
+
 
 
 
