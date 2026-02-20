@@ -43,13 +43,15 @@ if query:
             show_options = {}
             for i in resp:
                 s_data = i['show']
-                year = s_data.get('premiered', '????').split('-')[0] if s_data.get('premiered') else "????"
+                # Safety check for missing premiere dates
+                premiered = s_data.get('premiered')
+                year = premiered.split('-')[0] if premiered else "????"
                 show_options[f"{s_data['name']} ({year})"] = s_data['id']
                 
             selected_show = st.selectbox("Select Show", options=list(show_options.keys()))
             show_id = show_options[selected_show]
             
-            # 2. Input Layout - STRICTLY using s_val and ep_val
+            # 2. Input Layout - Using s_val and ep_val
             if app_mode == "Single Episode":
                 col1, col2 = st.columns(2)
                 with col1: 
@@ -58,7 +60,7 @@ if query:
                     ep_val = st.number_input("Episode", min_value=1, value=1)
             else:
                 s_val = st.number_input("Summarize Season", min_value=1, value=1)
-                ep_val = None # Not used in Season Mode
+                ep_val = 1 # Placeholder for safety
 
             # 3. Execution
             if st.button(f"Generate {app_mode} Recap"):
@@ -66,6 +68,7 @@ if query:
                     
                     if app_mode == "Single Episode":
                         # --- EPISODE LOGIC ---
+                        # Corrected URL using s_val and ep_val
                         url = f"https://api.tvmaze.com/shows/{show_id}/episodebynumber?season={s_val}&number={ep_val}&embed=guestcast"
                         data = requests.get(url).json()
                         
@@ -79,7 +82,7 @@ if query:
 
                             # THE PROMPT (Using s_val and ep_val)
                             prompt = f"""
-                           Act exactly like a helpful, conversational AI tv specialist answering a user who just asked: "What is Season {season_num}, Episode {episode_num} of {show_name} about?"
+                            Act exactly like a helpful, conversational AI tv specialist answering a user who just asked: "What is Season {season_num}, Episode {episode_num} of {show_name} about?"
         
         Using the raw data provided and your own extensive knowledge of television, give a natural, engaging, and easy-to-read recap. 
         
@@ -122,7 +125,7 @@ if query:
 
                             # THE PROMPT (Using s_val)
                             prompt = f"""
-                            Write a comprehensive season recap for {selected_show} Season {s_val} based on these summaries:
+                             Write a comprehensive season recap for {selected_show} Season {s_val} based on these summaries:
                             {full_context[:4000]}
 
                             RULES:
