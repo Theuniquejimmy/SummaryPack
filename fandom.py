@@ -13,22 +13,23 @@ st.set_page_config(page_title="TV Vault Reader", page_icon="📖", layout="cente
 st.markdown("""
     <style>
     .plot-text {
-        font-size: 1.2em;
+        font-size: 1.15em;
         line-height: 1.7;
-        background-color: #1e1e1e;
-        padding: 20px;
-        border-radius: 10px;
-        color: #e0e0e0;
+        background-color: #1a1a1a;
+        padding: 25px;
+        border-radius: 15px;
+        color: #f0f0f0;
+        border: 1px solid #333;
     }
     div.stButton > button {
         width: 100%;
-        height: 3em;
+        border-radius: 10px;
         font-weight: bold;
     }
     </style>
     """, unsafe_allow_html=True)
 
-# --- SCRAPER: THE FULL LORE COLLECTOR ---
+# --- SCRAPER ---
 def get_full_fandom_plot(show_name, ep_title):
     try:
         wiki_slug = show_name.replace(" ", "").lower()
@@ -50,58 +51,64 @@ def get_full_fandom_plot(show_name, ep_title):
                 for sibling in current.find_next_siblings():
                     if sibling.name in ['h2', 'h3']:
                         header_text = sibling.get_text().lower()
-                        # Stop ONLY at non-story sections
-                        if any(stop in header_text for stop in ['cast', 'trivia', 'gallery', 'references', 'videos']):
+                        if any(stop in header_text for stop in ['cast', 'trivia', 'gallery', 'references']):
                             break
                     if sibling.name in ['p', 'ul', 'ol']:
                         text = sibling.get_text().strip()
                         if text: content.append(text)
                 return "\n\n".join(content)
     except: return None
-    return "Lore not found for this specific episode URL."
+    return "Lore not found. Try checking the search spelling."
 
 # --- TTS HELPER ---
-def text_to_speech(text):
+def play_audio(text):
     tts = gTTS(text=text, lang='en')
-    tts.save("speech.mp3")
-    with open("speech.mp3", "rb") as f:
+    tts.save("temp_audio.mp3")
+    with open("temp_audio.mp3", "rb") as f:
         data = f.read()
         b64 = base64.b64encode(data).decode()
-        md = f"""
-            <audio controls autoplay="true">
+        # Custom HTML to allow for playback speed controls in some browsers
+        audio_html = f"""
+            <audio controls style="width: 100%;">
             <source src="data:audio/mp3;base64,{b64}" type="audio/mp3">
             </audio>
             """
-        st.markdown(md, unsafe_allow_html=True)
+        st.markdown(audio_html, unsafe_allow_html=True)
 
-# --- UI LOGIC ---
+# --- UI ---
 st.title("📖 TV Vault Reader")
-query = st.text_input("Search for a show", placeholder="e.g. Invincible")
+
+query = st.text_input("Search Show:", placeholder="e.g. Invincible")
 
 if query:
     resp = requests.get(f"https://api.tvmaze.com/search/shows?q={query}").json()
     if resp:
         show_options = {f"{i['show']['name']} ({i['show'].get('premiered','?').split('-')[0]})": i['show'] for i in resp}
-        label = st.selectbox("Select Show", options=list(show_options.keys()))
+        label = st.selectbox("Confirm Show", options=list(show_options.keys()))
         show = show_options[label]
         
         c1, c2 = st.columns(2)
         with c1: s_val = st.number_input("Season", min_value=1, value=1)
         with c2: ep_val = st.number_input("Episode", min_value=1, value=1)
 
-        if st.button("Fetch Full Lore"):
-            ep_data = requests.get(f"https://api.tvmaze.com/shows/{show['id']}/episodebynumber?season={s_val}&number={ep_val}").json()
-            if "name" in ep_data:
-                full_plot = get_full_fandom_plot(show['name'], ep_data['name'])
+        if st.button("🔓 Open the Vault"):
+            ep_url = f"https://api.tvmaze.com/shows/{show['id']}/episodebynumber?season={s_val}&number={ep_val}"
+            data = requests.get(ep_url).json()
+            
+            if "name" in data:
+                plot = get_full_fandom_plot(show['name'], data['name'])
                 
-                st.header(f"S{s_val}E{ep_val}: {ep_data['name']}")
-                if ep_data.get('image'): st.image(ep_data['image']['medium'])
+                st.subheader(f"{data['name']}")
+                if data.get('image'): 
+                    st.image(data['image']['medium'], use_container_width=True)
                 
-                # --- TTS BUTTON ---
-                if st.button("🔊 Read Lore Out Loud"):
-                    text_to_speech(full_plot)
+                # TTS Section
+                st.write("---")
+                if st.button("🔊 Narrate This Plot"):
+                    play_audio(plot)
+                st.caption("Tip: Use the three dots on the player to change playback speed.")
                 
-                # --- DISPLAY TEXT ---
-                st.markdown(f'<div class="plot-text">{full_plot}</div>', unsafe_allow_html=True)
+                # Text Section
+                st.markdown(f'<div class="plot-text">{plot}</div>', unsafe_allow_html=True)
             else:
-                st.error("Episode not found in TVmaze.")
+                st.error("Episode not found.")
