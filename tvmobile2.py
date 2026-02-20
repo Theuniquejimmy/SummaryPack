@@ -92,6 +92,8 @@ if query:
         3. Break the text into short, digestible paragraphs. 
         4. Use standard dashes (-) for bullet points. 
         5. Do NOT use Markdown formatting (like ** or #) since this will be displayed in a plain text window.
+        6. Write a high-detail, conversational recap.
+        7. Use the lore notes to mention subplots or specific character beats.
         
         Structure your response naturally, with this flow:
         - A informative opening acknowledging the episode title and where we are in the season.
@@ -173,3 +175,4 @@ if query:
         st.error(f"App Error: {e}")
 else:
     st.info("Enter a show title to begin.")
+
