@@ -33,22 +33,20 @@ st.markdown("""
 
 # --- WEB SCRAPING FUNCTION ---
 def get_fandom_data(show_name, ep_title):
-    """Attempts to pull deeper lore from Fandom Wiki."""
     try:
-        # Clean names for URL (e.g., 'Gilmore Girls' -> 'gilmoregirls')
         wiki_slug = show_name.replace(" ", "").lower()
         ep_slug = ep_title.replace(" ", "_")
         url = f"https://{wiki_slug}.fandom.com/wiki/{ep_slug}"
+        
+        # Save to debug state
+        st.session_state.debug_url = url
         
         headers = {'User-Agent': 'Mozilla/5.0'}
         res = requests.get(url, headers=headers, timeout=5)
         if res.status_code == 200:
             soup = BeautifulSoup(res.text, 'html.parser')
-            # Look for the 'Synopsis' or 'Summary' section
-            # Fandom often uses 'Synopsis' as an ID for a span
             synopsis = soup.find('span', id=lambda x: x and x in ['Synopsis', 'Summary', 'Plot'])
             if synopsis:
-                # Grab the next few paragraphs of deep lore
                 paras = []
                 curr = synopsis.find_parent().find_next_sibling()
                 while curr and curr.name == 'p' and len(paras) < 3:
@@ -164,3 +162,4 @@ if query:
         st.error(f"Error: {e}")
 else:
     st.info("Search a show to begin!")
+
