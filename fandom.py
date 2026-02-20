@@ -12,15 +12,12 @@ GROQ_KEY = st.secrets.get("GROQ_KEY") or os.environ.get("GROQ_KEY")
 
 st.set_page_config(page_title="TV Vault Pro", page_icon="📺", layout="centered")
 
-# Initialize Session States
-if "history" not in st.session_state: st.session_state.history = []
-if "debug_url" not in st.session_state: st.session_state.debug_url = ""
-
-# --- SLUG & EPISODE OVERRIDES ---
+# --- SLUG OVERRIDES ---
 SLUG_OVERRIDES = {
     "The Incredible Hulk": "marvelcinematicuniverse",
     "X-Men '97": "xmen97",
-    "The Wheel of Time": "wot"
+    "The Wheel of Time": "wot",
+    "Star Wars: The Clone Wars": "starwars"
 }
 
 # --- STYLING ---
@@ -28,11 +25,17 @@ st.markdown("""
     <style>
     div.stButton > button:first-child {
         width: 100%;
-        background-color: #f63366;
+        background-color: #3b82f6;
         color: white;
         border-radius: 12px;
         height: 3.5em;
         font-weight: bold;
+        border: none;
+    }
+    /* Increase font size for readability on longer answers */
+    .stMarkdown p {
+        font-size: 1.1em;
+        line-height: 1.6;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -50,25 +53,20 @@ def get_fandom_data(show_name, ep_title):
             url = f"{url}_(episode)"
             res = requests.get(url, headers=headers, timeout=5)
 
-        st.session_state.debug_url = url
         if res.status_code == 200:
             soup = BeautifulSoup(res.text, 'html.parser')
             synopsis = soup.find('span', id=lambda x: x and x in ['Synopsis', 'Summary', 'Plot'])
             if synopsis:
-                paras = [p.text.strip() for p in synopsis.find_parent().find_next_siblings('p')[:3]]
+                # Pull more paragraphs for a deeper word count
+                paras = [p.text.strip() for p in synopsis.find_parent().find_next_siblings('p')[:5]]
                 return " ".join(paras)
     except: return None
     return None
 
-# --- SIDEBAR ---
-with st.sidebar:
-    st.title("🕒 History")
-    for h in reversed(st.session_state.history[-5:]): st.info(h)
-    if st.button("Clear History"):
-        st.session_state.history = []
-        st.rerun()
-
 st.title("📺 TV Vault Pro")
+st.caption("Deep-Dive AI Recaps & Lore")
+
+# --- APP MODES ---
 mode = st.radio("Mode:", ["Single Episode", "Full Season"], horizontal=True)
 query = st.text_input("Search Show:", placeholder="e.g. Gilmore Girls")
 
@@ -80,32 +78,53 @@ if query:
             label = st.selectbox("Select Show:", options=list(show_map.keys()))
             show = show_map[label]
             
-            if label not in st.session_state.history: st.session_state.history.append(label)
-
             if mode == "Single Episode":
                 c1, c2 = st.columns(2)
                 with c1: s_val = st.number_input("Season", min_value=1, value=1)
                 with c2: ep_val = st.number_input("Episode", min_value=1, value=1)
             else:
                 s_val = st.number_input("Season", min_value=1, value=1)
-                ep_val = 1
 
-            if st.button(f"Generate {mode} Recap"):
-                with st.spinner("⚡ Groq is processing..."):
+            if st.button(f"Generate Deep {mode} Recap"):
+                with st.spinner("Analyzing deep lore and writing..."):
                     if mode == "Single Episode":
                         ep_data = requests.get(f"https://api.tvmaze.com/shows/{show['id']}/episodebynumber?season={s_val}&number={ep_val}&embed=guestcast").json()
                         if "name" in ep_data:
                             lore = get_fandom_data(show['name'], ep_data['name'])
                             if ep_data.get('image'): st.image(ep_data['image']['medium'], use_container_width=True)
-                            prompt = f"Recap S{s_val}E{ep_val} of {show['name']}. Title: {ep_data['name']}. Fandom Lore: {lore}. Summary: {re.sub('<[^<]+>', '', ep_data.get('summary', ''))}. RULES: Detailed, natural tone, no bolding. End with trivia."
+                            
+                            # PROMPT: Increased word limit/detail instructions
+                            prompt = f"""
+                            Act as a TV historian. Write a long-form, comprehensive recap of S{s_val}E{ep_val} of {show['name']}.
+                            Title: {ep_data['name']}
+                            Fandom Lore: {lore}
+                            Summary: {re.sub('<[^<]+>', '', ep_data.get('summary', ''))}
+
+                            INSTRUCTIONS:
+                            1. Go into great detail about character motivations, specific subplots (like Ross/Rachel or Paolo drama), and atmospheric details.
+                            2. Do not hold back on word count—be thorough and expansive.
+                            3. Use a friendly, expert tone. No bolding. No spoilers for the end of the episode.
+                            4. End with three unique trivia facts about this episode.
+                            """
                         else: st.error("Not found."); st.stop()
                     else:
+                        # Full Season Recap
                         seasons = requests.get(f"https://api.tvmaze.com/shows/{show['id']}/seasons").json()
                         target = next((s for s in seasons if s['number'] == s_val), None)
                         if target:
                             eps = requests.get(f"https://api.tvmaze.com/seasons/{target['id']}/episodes").json()
+                            # Increased character limit for season context to allow more detail
                             context = " ".join([re.sub('<[^<]+>', '', e.get('summary', '')) for e in eps])
-                            prompt = f"Summarize {show['name']} Season {s_val}. Context: {context[:3000]}. RULES: Focus on arcs, friendly tone, no bolding."
+                            prompt = f"""
+                            Write an exhaustive, high-word-count season recap for {show['name']} Season {s_val}.
+                            Context: {context[:5000]}
+                            
+                            INSTRUCTIONS:
+                            1. Analyze the entire season's arc. Discuss how the status quo changed from the first to the last episode.
+                            2. Provide in-depth analysis of character development for all lead roles.
+                            3. Be expansive and detailed. Avoid a summary; write a narrative.
+                            4. No bolding. End with a major behind-the-scenes breakdown.
+                            """
                             if target.get('image'): st.image(target['image']['medium'])
                         else: st.error("Not found."); st.stop()
 
@@ -117,16 +136,11 @@ if query:
                             model="llama-3.3-70b-versatile",
                         )
                         st.write(chat.choices[0].message.content)
-                        st.caption("🚀 Powered by Groq (Llama 3.3)")
-                    except Exception as e:
-                        st.warning("Groq busy, falling back to Gemini...")
-                        try:
-                            m_client = genai.Client(api_key=GEMINI_KEY)
-                            res = m_client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
-                            st.write(res.text)
-                            st.caption("✨ Fallback Recap by Gemini 2.0")
-                        except: st.error("Both AI services are down!")
+                    except:
+                        m_client = genai.Client(api_key=GEMINI_KEY)
+                        res = m_client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
+                        st.write(res.text)
 
-                    with st.expander("🛠️ Debugger"):
-                        st.write(f"**URL:** {st.session_state.debug_url}")
     except Exception as e: st.error(f"Error: {e}")
+else:
+    st.info("Search a show to begin your deep-dive.")
