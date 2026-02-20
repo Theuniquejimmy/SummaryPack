@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components  # NEW IMPORT REQUIRED
 import requests
 import urllib.parse
 from bs4 import BeautifulSoup
@@ -88,7 +89,6 @@ def get_raw_lore(wiki_slug, ep_title):
     return None, None
 
 # --- STATE INITIALIZATION ---
-# We initialize season and episode numbers into memory so we can control them programmatically
 if 's_val' not in st.session_state: st.session_state.s_val = 1
 if 'ep_val' not in st.session_state: st.session_state.ep_val = 1
 if 'auto_fetch' not in st.session_state: st.session_state.auto_fetch = False
@@ -102,11 +102,10 @@ if 'lore_text' not in st.session_state:
 
 # --- NEXT EPISODE CALLBACK ---
 def load_next_episode():
-    """This runs instantly when the Next Episode button is clicked."""
     st.session_state.ep_val += 1
-    st.session_state.auto_fetch = True  # Triggers the extraction block
-    st.session_state.lore_text = None   # Clear old text
-    st.session_state.b64_audio = None   # Clear old audio
+    st.session_state.auto_fetch = True
+    st.session_state.lore_text = None
+    st.session_state.b64_audio = None
 
 # --- UI LOGIC ---
 st.title("📖 TV Vault Reader")
@@ -123,13 +122,11 @@ if query:
             wiki_slug = WIKI_ALIASES.get(show_data['name'], show_data['name'].replace(" ", "").lower())
             
             c1, c2 = st.columns(2)
-            # By tying these to "key", Streamlit automatically updates them when we change the session state
             with c1: st.number_input("Season", min_value=1, key="s_val")
             with c2: st.number_input("Episode", min_value=1, key="ep_val")
 
-            # Trigger condition: Either you clicked the button, OR the Next Episode callback told it to fetch
             if st.button("🔓 Extract Full Lore", use_container_width=True) or st.session_state.auto_fetch:
-                st.session_state.auto_fetch = False # Immediately reset the trigger
+                st.session_state.auto_fetch = False
                 
                 api_url = f"https://api.tvmaze.com/shows/{show_data['id']}/episodebynumber?season={st.session_state.s_val}&number={st.session_state.ep_val}"
                 api_res = requests.get(api_url)
@@ -203,37 +200,60 @@ if query:
                         with open("lore.mp3", "rb") as f:
                             st.session_state.b64_audio = base64.b64encode(f.read()).decode()
 
+                # --- THE FIX: ISOLATED IFRAME COMPONENT ---
                 if st.session_state.b64_audio:
                     realtime_player_html = f"""
-                    <div style="background-color: {current_theme['player']}; padding: 15px; border-radius: 10px; margin-top: 15px; border-left: 4px solid {current_theme['accent']};">
-                        <audio id="narrator-audio" controls autoplay style="width: 100%;">
-                            <source src="data:audio/mp3;base64,{st.session_state.b64_audio}" type="audio/mp3">
-                        </audio>
-                        <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 12px; color: {current_theme['text']}; font-family: sans-serif;">
-                            <label for="speed-slider" style="font-size: 0.95rem; font-weight: 500;">
-                                🏃 Playback Speed: <span id="speed-display">1.0x</span>
-                            </label>
-                            <input type="range" id="speed-slider" min="0.5" max="2.0" step="0.1" value="1.0" style="width: 50%; cursor: pointer;">
+                    <!DOCTYPE html>
+                    <html>
+                    <head>
+                    <style>
+                        body {{
+                            margin: 0;
+                            padding: 0;
+                            background-color: transparent;
+                        }}
+                        .player-box {{
+                            background-color: {current_theme['player']}; 
+                            padding: 15px; 
+                            border-radius: 10px; 
+                            border-left: 4px solid {current_theme['accent']};
+                            font-family: sans-serif;
+                            color: {current_theme['text']};
+                        }}
+                    </style>
+                    </head>
+                    <body>
+                        <div class="player-box">
+                            <audio id="narrator-audio" controls autoplay style="width: 100%;">
+                                <source src="data:audio/mp3;base64,{st.session_state.b64_audio}" type="audio/mp3">
+                            </audio>
+                            <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 12px;">
+                                <label for="speed-slider" style="font-size: 0.95rem; font-weight: 500;">
+                                    🏃 Playback Speed: <span id="speed-display">1.0x</span>
+                                </label>
+                                <input type="range" id="speed-slider" min="0.5" max="2.0" step="0.1" value="1.0" style="width: 50%; cursor: pointer;">
+                            </div>
                         </div>
-                    </div>
-                    
-                    <script>
-                        const audio = document.getElementById("narrator-audio");
-                        const slider = document.getElementById("speed-slider");
-                        const display = document.getElementById("speed-display");
                         
-                        slider.addEventListener("input", function() {{
-                            audio.playbackRate = this.value;
-                            display.textContent = parseFloat(this.value).toFixed(1) + "x";
-                        }});
-                    </script>
+                        <script>
+                            const audio = document.getElementById("narrator-audio");
+                            const slider = document.getElementById("speed-slider");
+                            const display = document.getElementById("speed-display");
+                            
+                            slider.addEventListener("input", function() {{
+                                audio.playbackRate = this.value;
+                                display.textContent = parseFloat(this.value).toFixed(1) + "x";
+                            }});
+                        </script>
+                    </body>
+                    </html>
                     """
-                    st.markdown(realtime_player_html, unsafe_allow_html=True)
+                    # Render as an iframe so the JS executes perfectly
+                    components.html(realtime_player_html, height=120)
 
                 st.markdown(f'<div class="pro-reader">{st.session_state.lore_text}</div>', unsafe_allow_html=True)
                 st.caption(f"Source: [Fandom Wiki]({st.session_state.wiki_url})")
                 
-                # --- NEXT EPISODE BUTTON ---
                 st.divider()
                 st.button(f"⏭️ Load Season {st.session_state.s_val}, Episode {st.session_state.ep_val + 1}", on_click=load_next_episode, use_container_width=True)
 
