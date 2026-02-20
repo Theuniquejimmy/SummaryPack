@@ -4,162 +4,149 @@ import re
 import os
 from google import genai
 from groq import Groq
+from bs4 import BeautifulSoup
 
 # --- CONFIGURATION ---
-# Pulls keys from Streamlit Secrets (Cloud) or Environment Variables (Local)
 GEMINI_KEY = st.secrets.get("GEMINI_KEY") or os.environ.get("GEMINI_KEY")
 GROQ_KEY = st.secrets.get("GROQ_KEY") or os.environ.get("GROQ_KEY")
 
-st.set_page_config(page_title="TV Vault Pro", page_icon="📺")
+st.set_page_config(page_title="TV Vault Pro", page_icon="📺", layout="centered")
 
-# --- MOBILE STYLING ---
-st.markdown("""
-    <style>
-    div.stButton > button:first-child {
-        width: 100%;
-        background-color: #007BFF;
-        color: white;
-        border-radius: 12px;
-        height: 3.5em;
-        font-weight: bold;
-    }
-    </style>
-    """, unsafe_allow_html=True)
+# --- SLUG CORRECTION TABLE ---
+# Add any shows here that don't follow the standard "showname.fandom" rule
+SLUG_OVERRIDES = {
+    "The Incredible Hulk": "marvelcinematicuniverse",
+    "DC's Legends of Tomorrow": "legendsoftomorrow",
+    "X-Men '97": "xmen97",
+    "The Wheel of Time": "wot",
+    "Star Wars: The Clone Wars": "starwars"
+}
+
+# Initialize History & Debug Logs
+if "history" not in st.session_state: st.session_state.history = []
+if "debug_url" not in st.session_state: st.session_state.debug_url = ""
+
+# --- SCRAPER WITH SLUG LOGIC ---
+def get_fandom_data(show_name, ep_title):
+    try:
+        # 1. Determine the Wiki Slug (Check override first, then default)
+        wiki_slug = SLUG_OVERRIDES.get(show_name)
+        if not wiki_slug:
+            wiki_slug = show_name.replace(" ", "").lower()
+            
+        # 2. Clean Episode Title for URL
+        # Fandom removes most punctuation and replaces spaces with underscores
+        ep_slug = re.sub(r'[^\w\s-]', '', ep_title).replace(" ", "_")
+        
+        url = f"https://{wiki_slug}.fandom.com/wiki/{ep_slug}"
+        st.session_state.debug_url = url
+        
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        res = requests.get(url, headers=headers, timeout=5)
+        
+        if res.status_code == 200:
+            soup = BeautifulSoup(res.text, 'html.parser')
+            # Fandom often hides the summary under these specific IDs
+            synopsis = soup.find('span', id=lambda x: x and x in ['Synopsis', 'Summary', 'Plot', 'Episode_Summary'])
+            if synopsis:
+                paras = []
+                # Look for the actual text content following the header
+                curr = synopsis.find_parent().find_next_sibling()
+                while curr and curr.name == 'p' and len(paras) < 3:
+                    if curr.text.strip():
+                        paras.append(curr.text.strip())
+                    curr = curr.find_next_sibling()
+                return " ".join(paras)
+    except:
+        return None
+    return None
+
+# --- SIDEBAR & UI ---
+with st.sidebar:
+    st.title("🕒 Recent Searches")
+    for item in reversed(st.session_state.history[-5:]):
+        st.info(item)
+    if st.button("Clear History"):
+        st.session_state.history = []
+        st.rerun()
 
 st.title("📺 TV Vault Pro")
 
-# --- MODE SELECTION ---
+# --- APP LOGIC ---
 app_mode = st.radio("Recap Mode:", ["Single Episode", "Full Season"], horizontal=True)
-
-# --- SEARCH ---
-query = st.text_input("Search for a show", placeholder="e.g. Friends")
+query = st.text_input("Search for a show", placeholder="e.g. The Incredible Hulk")
 
 if query:
     try:
-        # 1. Show Search
         resp = requests.get(f"https://api.tvmaze.com/search/shows?q={query}").json()
-        
         if resp:
-            show_options = {}
-            for i in resp:
-                s_data = i['show']
-                p_date = s_data.get('premiered')
-                year = p_date.split('-')[0] if p_date else "????"
-                show_options[f"{s_data['name']} ({year})"] = s_data['id']
-                
-            selected_show = st.selectbox("Select Show", options=list(show_options.keys()))
-            show_id = show_options[selected_show]
+            # Map labels to show data
+            show_options = {f"{i['show']['name']} ({i['show'].get('premiered','?').split('-')[0]})": i['show'] for i in resp}
+            selected_label = st.selectbox("Select Show", options=list(show_options.keys()))
+            show_data = show_options[selected_label]
             
-            # --- INPUTS: Defining s_val and ep_val clearly ---
+            if selected_label not in st.session_state.history:
+                st.session_state.history.append(selected_label)
+
+            # Input fields
             if app_mode == "Single Episode":
-                col1, col2 = st.columns(2)
-                with col1:
-                    s_val = st.number_input("Season", min_value=1, value=1, key="s_input")
-                with col2:
-                    ep_val = st.number_input("Episode", min_value=1, value=1, key="e_input")
+                c1, c2 = st.columns(2)
+                with c1: s_val = st.number_input("Season", min_value=1, value=1)
+                with c2: ep_val = st.number_input("Episode", min_value=1, value=1)
             else:
-                # Season mode only needs the season number
-                s_val = st.number_input("Summarize Season", min_value=1, value=1, key="s_season_input")
-                ep_val = 1 # Safety placeholder
+                s_val = st.number_input("Season", min_value=1, value=1)
 
             if st.button(f"Generate {app_mode} Recap"):
-                with st.spinner("AI is analyzing the vault..."):
-                    
+                with st.spinner("Hunting for deep lore..."):
                     if app_mode == "Single Episode":
-                        # --- EPISODE LOGIC ---
-                        # Corrected URL using s_val and ep_val
-                        url = f"https://api.tvmaze.com/shows/{show_id}/episodebynumber?season={s_val}&number={ep_val}&embed=guestcast"
+                        # TVmaze Core Data
+                        url = f"https://api.tvmaze.com/shows/{show_data['id']}/episodebynumber?season={s_val}&number={ep_val}&embed=guestcast"
                         data = requests.get(url).json()
                         
                         if "name" in data:
-                            if data.get('image'): 
-                                st.image(data['image']['medium'], use_container_width=True)
+                            # Fandom Deep Search
+                            fandom_lore = get_fandom_data(show_data['name'], data['name'])
+                            if data.get('image'): st.image(data['image']['medium'], use_container_width=True)
                             
                             clean_summary = re.sub('<[^<]+>', '', data.get('summary', ''))
                             guest_list = data.get('_embedded', {}).get('guestcast', [])
-                            guests = ", ".join([f"{g['character']['name']} ({g['person']['name']})" for g in guest_list]) or "No major guests."
+                            guests = ", ".join([f"{g['character']['name']} ({g['person']['name']})" for g in guest_list]) or "None"
 
-                            # THE PROMPT (Using s_val and ep_val exclusively)
                             prompt = f"""
-                            Recap Season {s_val}, Episode {ep_val} of {selected_show} as if you are a tv specialist.
+                            Recap S{s_val}E{ep_val} of {show_data['name']}.
                             Title: {data['name']}
                             Guests: {guests}
-                            Summary: {clean_summary}
-
-                             CRITICAL RULES:
-        1. NO SPOILERS for future episodes, but can spoil current episode.
-        2. Write in a conversational, informative tone.
-        3. Break the text into short, digestible paragraphs. 
-        4. Use standard dashes (-) for bullet points. 
-        5. Do NOT use Markdown formatting (like ** or #) since this will be displayed in a plain text window.
-        
-        Structure your response naturally, with this flow:
-        - A informative opening acknowledging the episode title and where we are in the season.
-        - A setup of where the main characters are at the start of the episode.
-        - The main plot points or conflict (use a detailed bulleted list with dashes). CRITICAL: Use your own internal knowledge to fill in any major subplots, romantic developments, or notable guest characters that are missing from the raw data.        - How the episode ends. where do the characters end up?
-        - List all main plot points of episode so if I havent seen it it'll fill me in.
-        - A quick piece of trivia about the episode, guest stars
-        - How it ties into the larger season arc.
-        
-                            """
-                        else:
-                            st.error(f"Episode S{s_val}E{ep_val} not found.")
-                            st.stop()
-                    
-                    else:
-                        # --- SEASON LOGIC ---
-                        # 1. Get Season ID
-                        seasons = requests.get(f"https://api.tvmaze.com/shows/{show_id}/seasons").json()
-                        target = next((s for s in seasons if s['number'] == s_val), None)
-                        
-                        if target:
-                            if target.get('image'): 
-                                st.image(target['image']['medium'], use_container_width=True)
-                            
-                            # 2. Get all episode summaries
-                            ep_list = requests.get(f"https://api.tvmaze.com/seasons/{target['id']}/episodes").json()
-                            full_text = " ".join([re.sub('<[^<]+>', '', e.get('summary', '')) for e in ep_list])
-                            
-                            # THE PROMPT (Using s_val)
-                            prompt = f"""
-                            Act as an authentic, adaptive AI collaborator with a touch of wit. Provide a thorough, insightful recap of {selected_show} Season {s_val} as if i'v never seen it and need to prepare myself to watch the next season.
-                            Episode Context: {full_text[:3500]}
-                            Your response must follow these structural guidelines:
-
-                            Tone: Balance empathy with candor. Be a supportive, grounded guide who uses clear, concise prose with a hint of humor.
-
-                            Introduction: Start with a brief, high-energy hook that captures the 'vibe' of the story.
-
-                            The Core Conflict: Use an H2 heading to explain the central plot engine or 'the deal' that sets the story in motion.
-
-                            Character Arcs: Use H2 headings to break down the journeys of the 2-3 main protagonists. Use bullet points for specific sub-plots (romance, career, etc.).
-        
-                            Notable Moments: List 'must-know' plot points for every episodes or chapters using a numbered list.
-
-                            Formatting Toolkit: Use horizontal rules (---) to separate sections, bold key terms to make the text scannable, and avoid dense walls of text.
-    
-                            Thematic Wrap-up: End with a brief H3 section on the overall theme of this specific installment.
+                            TVmaze Snippet: {clean_summary}
+                            Fandom Deep Lore: {fandom_lore if fandom_lore else "Use internal knowledge."}
 
                             RULES:
-                            1. Identify major story arcs and character growth over the year.
-                            2. Friendly, conversational tone.
-                            3. NO MARKDOWN (no bolding or hashtags). Use dashes (-) for bullets.
-                            4. Do not spoil the next season's cliffhanger.
-                            5. Identify at least TWO important plot point for every episode of the season so, if season has 25 epsiodes 50 plot points at least and write them with great detail that if you havn't seen the episode you'd know the main plot. Cite each with episode tag its from "S*E*" and list them in order of episode.
-                            6. End with a thourough summary of the season hitting the most important plot points. 
-                            7. What I need to know for next season.
-                            8. Don't skip episodes when giving summaries.
+                            1. Write a high-detail, conversational recap.
+                            2. Use the lore notes to mention subplots or specific character beats.
+                            3. NO bolding. NO spoilers for the end.
+                            4. End with a unique trivia fact.
                             """
                         else:
-                            st.error(f"Season {s_val} not found.")
+                            st.error("Episode not found.")
+                            st.stop()
+                    else:
+                        # Full Season Recap
+                        seasons = requests.get(f"https://api.tvmaze.com/shows/{show_data['id']}/seasons").json()
+                        target = next((s for s in seasons if s['number'] == s_val), None)
+                        if target:
+                            eps = requests.get(f"https://api.tvmaze.com/seasons/{target['id']}/episodes").json()
+                            full_text = " ".join([re.sub('<[^<]+>', '', e.get('summary', '')) for e in eps])
+                            prompt = f"Summarize story arcs for {show_data['name']} Season {s_val}. Context: {full_text[:3500]}."
+                            if target.get('image'): st.image(target['image']['medium'])
+                        else:
+                            st.error("Season not found.")
                             st.stop()
 
-                    # --- AI CALL (Gemini with Groq Fallback) ---
+                    # AI Call
                     try:
                         client = genai.Client(api_key=GEMINI_KEY)
                         res = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
                         st.write(res.text)
-                    except Exception:
+                    except:
                         groq_client = Groq(api_key=GROQ_KEY)
                         chat = groq_client.chat.completions.create(
                             messages=[{"role": "user", "content": prompt}],
@@ -167,22 +154,13 @@ if query:
                         )
                         st.write(chat.choices[0].message.content)
 
-        else:
-            st.warning("No shows found.")
+                    # Debugger
+                    with st.expander("🛠️ Slug & URL Debugger"):
+                        st.code(f"Show Name: {show_data['name']}\nTarget URL: {st.session_state.debug_url}")
+                        if fandom_lore: st.success("Fandom Data Successfully Scraped!")
+                        else: st.warning("Fandom Data Not Found - Defaulting to AI Knowledge.")
+
     except Exception as e:
         st.error(f"App Error: {e}")
 else:
-    st.info("Enter a show title to begin.")
-
-
-
-
-
-
-
-
-
-
-
-
-
+    st.info("Search a show to begin!")
