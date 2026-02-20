@@ -148,7 +148,10 @@ if series_query and 'volume_id' in locals():
                         st.image(img_url, use_container_width=True)
                 with col2:
                     st.subheader(f"{selected_vol_name} #{issue_num}")
-                    summary = generate_ai_summary(issue_data, selected_vol_name, issue_num)
-                    st.markdown(summary)
+                    # Wrap the summary in a border to look like a file dossier
+                    with st.container(border=True):
+                        summary = generate_ai_summary(issue_data, selected_vol_name, issue_num)
+                        st.markdown(summary)
             else:
+
                 st.error(f"Issue #{issue_num} not found.")
