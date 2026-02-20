@@ -95,15 +95,16 @@ if query:
                             
                             # PROMPT: Increased word limit/detail instructions
                             prompt = f"""
-                            Act as a TV historian. Write a long-form, comprehensive recap of S{s_val}E{ep_val} of {show['name']}.
+                            Act as a TV historian. Write a comprehensive recap of S{s_val}E{ep_val} of {show['name']}.
                             Title: {ep_data['name']}
                             Fandom Lore: {lore}
                             Summary: {re.sub('<[^<]+>', '', ep_data.get('summary', ''))}
 
                             INSTRUCTIONS:
-                            1. Go into great detail about character motivations, specific subplots (like Ross/Rachel or Paolo drama), and atmospheric details.
+                            1. Go into great detail about character motivations, specific subplots (like Ross/Rachel or Paolo drama).
                             2. Do not hold back on word count—be thorough and expansive.
                             3. Use a friendly, expert tone. No bolding. Use bullet points for easier reading.
+                            4. Be sure to cover how the epoisode ends and where we'll need to be for the next one.
                             """
                         else: st.error("Not found."); st.stop()
                     else:
@@ -147,6 +148,7 @@ if query:
     except Exception as e: st.error(f"Error: {e}")
 else:
     st.info("Search a show to begin your deep-dive.")
+
 
 
 
