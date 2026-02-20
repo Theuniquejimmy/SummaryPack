@@ -39,7 +39,7 @@ st.markdown("""
 def get_raw_lore(wiki_slug, ep_title):
     api_url = f"https://{wiki_slug.lower()}.fandom.com/api.php"
     
-    # STEP 1: Search the wiki database to find the exact, case-sensitive page title
+    # STEP 1: Search for the exact page title
     search_params = {
         "action": "query",
         "list": "search",
@@ -54,11 +54,10 @@ def get_raw_lore(wiki_slug, ep_title):
         if not search_results:
             return None, None
             
-        # Get the exact title from the best match
         exact_title = search_results[0]["title"]
         page_url = f"https://{wiki_slug.lower()}.fandom.com/wiki/{urllib.parse.quote(exact_title.replace(' ', '_'))}"
         
-        # STEP 2: Ask the API for the pure HTML text of that specific page
+        # STEP 2: Ask for the pure HTML
         parse_params = {
             "action": "parse",
             "page": exact_title,
@@ -73,8 +72,12 @@ def get_raw_lore(wiki_slug, ep_title):
         if not html_text:
             return None, None
             
-        # STEP 3: Parse the clean HTML (This preserves lists, but ignores sidebars!)
+        # STEP 3: Parse the clean HTML
         soup = BeautifulSoup(html_text, 'html.parser')
+        
+        # Scrub out the annoying "[edit]" links that Fandom attaches to headers
+        for edit_btn in soup.find_all('span', class_='mw-editsection'):
+            edit_btn.decompose()
         
         start_node = None
         story_keywords = ['plot', 'synopsis', 'summary', 'episode_summary']
@@ -92,15 +95,24 @@ def get_raw_lore(wiki_slug, ep_title):
                 
         if start_node:
             content = []
-            # Grab everything until the cast list
+            
             for sibling in start_node.find_next_siblings():
-                if sibling.name in ['h2', 'h3']:
+                # If we hit an H2 or H3, we need to see if it's a stop word or a sub-heading we want to keep
+                if sibling.name in ['h2', 'h3', 'h4']:
+                    h_text = sibling.get_text().strip()
+                    h_text_lower = h_text.lower()
                     stop_words = ['cast', 'trivia', 'gallery', 'references', 'production', 'credits', 'quotes', 'videos']
-                    if any(stop in sibling.get_text().lower() for stop in stop_words):
-                        break
+                    
+                    if any(stop in h_text_lower for stop in stop_words):
+                        break  # Stop scraping!
+                    
+                    # If it's not a stop word, it's a story sub-heading (like "The Final Battle")
+                    if h_text:
+                        # We format it with Markdown so it looks bold and separated
+                        content.append(f"\n### {h_text}\n")
                 
-                # Crucial: We grab <p> AND <ul>/<ol> so the bullet points aren't lost
-                if sibling.name in ['p', 'ul', 'ol']:
+                # Grab the standard text and lists
+                elif sibling.name in ['p', 'ul', 'ol']:
                     txt = sibling.get_text().strip()
                     if txt:
                         content.append(txt)
