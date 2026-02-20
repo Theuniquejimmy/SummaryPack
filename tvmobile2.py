@@ -128,7 +128,7 @@ if query:
                             2. Friendly, conversational tone.
                             3. NO MARKDOWN (no bolding or hashtags). Use dashes (-) for bullets.
                             4. Do not spoil the next season's cliffhanger.
-                            5. Identify at least one or two important plot point per episode of the season so of season has 25 epsiodes 25 plot points at least. Cite each with episode tag its from "S*E*" and list them in chronological order.
+                            5. Identify at least one or two important plot point per episode of the season so of season has 25 epsiodes 25 plot points at least. Cite each with episode tag its from "S*E*" and list them in order of episode.
                             """
                         else:
                             st.error(f"Season {s_val} not found.")
@@ -153,6 +153,7 @@ if query:
         st.error(f"App Error: {e}")
 else:
     st.info("Enter a show title to begin.")
+
 
 
 
