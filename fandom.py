@@ -2,23 +2,40 @@ import streamlit as st
 import requests
 import re
 import os
-from groq import Groq
-from google import genai
 from bs4 import BeautifulSoup
+from gtts import gTTS
+import base64
 
 # --- CONFIGURATION ---
-GEMINI_KEY = st.secrets.get("GEMINI_KEY") or os.environ.get("GEMINI_KEY")
-GROQ_KEY = st.secrets.get("GROQ_KEY") or os.environ.get("GROQ_KEY")
+st.set_page_config(page_title="TV Vault Reader", page_icon="📖", layout="centered")
 
-st.set_page_config(page_title="TV Vault Pro", page_icon="📺", layout="centered")
+# --- MOBILE STYLING ---
+st.markdown("""
+    <style>
+    .plot-text {
+        font-size: 1.2em;
+        line-height: 1.7;
+        background-color: #1e1e1e;
+        padding: 20px;
+        border-radius: 10px;
+        color: #e0e0e0;
+    }
+    div.stButton > button {
+        width: 100%;
+        height: 3em;
+        font-weight: bold;
+    }
+    </style>
+    """, unsafe_allow_html=True)
 
-# --- MASTER SCRAPER: READS THE ENTIRE PAGE ---
-def get_fandom_data(show_name, ep_title):
+# --- SCRAPER: THE FULL LORE COLLECTOR ---
+def get_full_fandom_plot(show_name, ep_title):
     try:
         wiki_slug = show_name.replace(" ", "").lower()
         ep_slug = re.sub(r'[^\w\s-]', '', ep_title).replace(" ", "_")
         url = f"https://{wiki_slug}.fandom.com/wiki/{ep_slug}"
         headers = {'User-Agent': 'Mozilla/5.0'}
+        
         res = requests.get(url, headers=headers, timeout=5)
         if res.status_code != 200:
             res = requests.get(f"{url}_(episode)", headers=headers, timeout=5)
@@ -26,88 +43,65 @@ def get_fandom_data(show_name, ep_title):
         if res.status_code == 200:
             soup = BeautifulSoup(res.text, 'html.parser')
             start_node = soup.find('span', id=lambda x: x and x in ['Synopsis', 'Summary', 'Plot', 'Episode_Summary'])
+            
             if start_node:
                 content = []
-                # Greedy search: Grab everything until the very end of the article
-                for sibling in start_node.find_parent().find_next_siblings():
-                    # Stop ONLY at references or footer sections
+                current = start_node.find_parent()
+                for sibling in current.find_next_siblings():
                     if sibling.name in ['h2', 'h3']:
                         header_text = sibling.get_text().lower()
-                        if any(stop in header_text for stop in ['references', 'gallery', 'videos', 'external', 'navigation']):
+                        # Stop ONLY at non-story sections
+                        if any(stop in header_text for stop in ['cast', 'trivia', 'gallery', 'references', 'videos']):
                             break
                     if sibling.name in ['p', 'ul', 'ol']:
-                        content.append(sibling.get_text().strip())
+                        text = sibling.get_text().strip()
+                        if text: content.append(text)
                 return "\n\n".join(content)
     except: return None
-    return None
+    return "Lore not found for this specific episode URL."
 
-st.title("📺 TV Vault Pro")
-st.caption("Deep-Dive mode enabled: Maximum detail, zero bleeding.")
+# --- TTS HELPER ---
+def text_to_speech(text):
+    tts = gTTS(text=text, lang='en')
+    tts.save("speech.mp3")
+    with open("speech.mp3", "rb") as f:
+        data = f.read()
+        b64 = base64.b64encode(data).decode()
+        md = f"""
+            <audio controls autoplay="true">
+            <source src="data:audio/mp3;base64,{b64}" type="audio/mp3">
+            </audio>
+            """
+        st.markdown(md, unsafe_allow_html=True)
 
 # --- UI LOGIC ---
-mode = st.radio("Mode:", ["Single Episode", "Full Season"], horizontal=True)
-query = st.text_input("Search Show:", placeholder="e.g. Invincible")
+st.title("📖 TV Vault Reader")
+query = st.text_input("Search for a show", placeholder="e.g. Invincible")
 
 if query:
-    try:
-        resp = requests.get(f"https://api.tvmaze.com/search/shows?q={query}").json()
-        if resp:
-            show_options = {f"{i['show']['name']} ({i['show'].get('premiered','?').split('-')[0]})": i['show'] for i in resp}
-            label = st.selectbox("Select Show:", options=list(show_map.keys())) if 'show_map' in locals() else st.selectbox("Select Show:", options=list(show_options.keys()))
-            show_data = show_options[label]
-            
-            if mode == "Single Episode":
-                c1, c2 = st.columns(2)
-                with c1: s_val = st.number_input("Season", min_value=1, value=1)
-                with c2: ep_val = st.number_input("Episode", min_value=1, value=1)
+    resp = requests.get(f"https://api.tvmaze.com/search/shows?q={query}").json()
+    if resp:
+        show_options = {f"{i['show']['name']} ({i['show'].get('premiered','?').split('-')[0]})": i['show'] for i in resp}
+        label = st.selectbox("Select Show", options=list(show_options.keys()))
+        show = show_options[label]
+        
+        c1, c2 = st.columns(2)
+        with c1: s_val = st.number_input("Season", min_value=1, value=1)
+        with c2: ep_val = st.number_input("Episode", min_value=1, value=1)
+
+        if st.button("Fetch Full Lore"):
+            ep_data = requests.get(f"https://api.tvmaze.com/shows/{show['id']}/episodebynumber?season={s_val}&number={ep_val}").json()
+            if "name" in ep_data:
+                full_plot = get_full_fandom_plot(show['name'], ep_data['name'])
+                
+                st.header(f"S{s_val}E{ep_val}: {ep_data['name']}")
+                if ep_data.get('image'): st.image(ep_data['image']['medium'])
+                
+                # --- TTS BUTTON ---
+                if st.button("🔊 Read Lore Out Loud"):
+                    text_to_speech(full_plot)
+                
+                # --- DISPLAY TEXT ---
+                st.markdown(f'<div class="plot-text">{full_plot}</div>', unsafe_allow_html=True)
             else:
-                s_val = st.number_input("Season", min_value=1, value=1)
-
-            if st.button(f"Generate Epic {mode} Recap"):
-                with st.spinner("Writing a high-detail narrative..."):
-                    if mode == "Single Episode":
-                        ep_url = f"https://api.tvmaze.com/shows/{show_data['id']}/episodebynumber?season={s_val}&number={ep_val}"
-                        data = requests.get(ep_url).json()
-                        
-                        if "name" in data:
-                            lore = get_fandom_data(show_data['name'], data['name'])
-                            if data.get('image'): st.image(data['image']['medium'], use_container_width=True)
-                            
-                            # THE "EPIC SCALE" PROMPT
-                            prompt = f"""
-                            Act as a Professional TV Critic. Write an EXHAUSTIVE, 1000+ word narrative recap of ONLY Season {s_val}, Episode {ep_val} of {show_data['name']}.
-                            Episode Title: {data['name']}
-                            FULL WIKI TEXT: {lore}
-
-                            STRUCTURE:
-                            1. PREVIOUSLY ON: A 2-sentence summary of the major cliffhanger from the previous episode to set the stage.
-                            2. THE SETUP: Detailed breakdown of the episode's opening and character motivations.
-                            3. THE ESCALATION: Beat-by-beat narrative of the middle-act action and dialogue.
-                            4. THE CLIMAX & ENDING: A massive, vivid description of the final confrontation, including any post-credits scenes.
-                            
-                            STRICT RULES:
-                            - Use the FULL WIKI TEXT provided. Do not skip any paragraphs.
-                            - Stay strictly within the timeline of THIS episode for the main body.
-                            - Be descriptive, atmospheric, and conversational.
-                            - NO BOLDING.
-                            """
-                        else: st.error("Episode not found."); st.stop()
-                    else:
-                        # Full Season mode
-                        seasons = requests.get(f"https://api.tvmaze.com/shows/{show_data['id']}/seasons").json()
-                        target = next((s for s in seasons if s['number'] == s_val), None)
-                        if target:
-                            eps = requests.get(f"https://api.tvmaze.com/seasons/{target['id']}/episodes").json()
-                            context = " ".join([re.sub('<[^<]+>', '', e.get('summary', '')) for e in eps])
-                            prompt = f"Write a massive 2000-word narrative recap for {show_data['name']} Season {s_val}. Context: {context[:8000]}."
-                        else: st.error("Season not found."); st.stop()
-
-                    # --- AI EXECUTION ---
-                    client = Groq(api_key=GROQ_KEY)
-                    chat = client.chat.completions.create(
-                        messages=[{"role": "user", "content": prompt}],
-                        model="llama-3.3-70b-versatile",
-                    )
-                    st.write(chat.choices[0].message.content)
-
-    except Exception as e: st.error(f"Error: {e}")
+                st.error("Episode not found in TVmaze.")
