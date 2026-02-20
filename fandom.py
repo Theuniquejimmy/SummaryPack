@@ -1,8 +1,6 @@
 import streamlit as st
 import requests
-import re
 import urllib.parse
-from bs4 import BeautifulSoup
 from gtts import gTTS
 import base64
 
@@ -36,53 +34,61 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- THE DOCUMENT ORDER SCANNER ---
+# --- THE MEDIAWIKI API EXTRACTOR ---
 def get_raw_lore(wiki_slug, ep_title):
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+    api_url = f"https://{wiki_slug.lower()}.fandom.com/api.php"
     
-    # FIX 1: Safely encode apostrophes and special characters for Fandom URLs
-    base_title = ep_title.replace(" ", "_")
-    patterns = [
-        urllib.parse.quote(base_title),
-        urllib.parse.quote(base_title + "_(episode)"),
-        urllib.parse.quote(ep_title.title().replace(" ", "_"))
+    # We don't need underscores for the API; natural spaces work perfectly!
+    variations = [
+        ep_title,
+        f"{ep_title} (episode)",
+        f"{ep_title} (TV episode)"
     ]
     
-    for p in patterns:
-        url = f"https://{wiki_slug.lower()}.fandom.com/wiki/{p}"
+    for v in variations:
+        params = {
+            "action": "query",
+            "prop": "extracts",
+            "explaintext": "1", # This tells the server to strip all HTML automatically
+            "titles": v,
+            "format": "json",
+            "redirects": "1"    # Automatically follow Fandom redirects
+        }
+        
         try:
-            res = requests.get(url, headers=headers, timeout=10)
+            res = requests.get(api_url, params=params, timeout=10)
             if res.status_code == 200:
-                soup = BeautifulSoup(res.text, 'html.parser')
-                content_div = soup.find('div', class_='mw-parser-output')
+                data = res.json()
+                pages = data.get("query", {}).get("pages", {})
                 
-                if not content_div: 
-                    continue
-                
-                content = []
-                # FIX 2: Scan the entire document sequentially
-                for tag in content_div.find_all(['h2', 'h3', 'p', 'ul', 'ol']):
-                    
-                    # IGNORE the right-hand sidebar/infobox and table of contents
-                    if tag.find_parent('aside') or tag.find_parent('table') or tag.find_parent('nav') or tag.get('id') == 'toc':
-                        continue
-                    
-                    # Check for STOP headers
-                    if tag.name in ['h2', 'h3']:
-                        h_text = tag.get_text().lower()
-                        stop_words = ['cast', 'trivia', 'gallery', 'references', 'production', 'credits', 'quotes', 'videos', 'notes']
-                        if any(stop in h_text for stop in stop_words):
-                            break # We hit the end of the story, stop entirely
-                    
-                    # Collect the actual text
-                    elif tag.name in ['p', 'ul', 'ol']:
-                        txt = tag.get_text().strip()
-                        # Filter out tiny blank artifacts or spacing issues
-                        if len(txt) > 25:
-                            content.append(txt)
-                
-                if content:
-                    return "\n\n".join(content), url
+                for page_id, page_data in pages.items():
+                    # If page_id is "-1", the page doesn't exist
+                    if page_id != "-1" and "extract" in page_data:
+                        raw_text = page_data["extract"]
+                        
+                        # Process the raw text document
+                        lines = raw_text.split('\n')
+                        story_content = []
+                        
+                        for line in lines:
+                            # The API formats headers as "== Header Name =="
+                            if line.startswith("== ") and line.endswith(" =="):
+                                header_name = line.lower()
+                                stop_words = ['cast', 'trivia', 'gallery', 'references', 'production', 'credits', 'quotes', 'videos', 'notes']
+                                if any(stop in header_name for stop in stop_words):
+                                    break # We hit the end of the story
+                                
+                                # Format subheaders nicely for our display
+                                clean_header = line.replace("=", "").strip()
+                                story_content.append(f"### {clean_header}")
+                            elif line.strip():
+                                story_content.append(line.strip())
+                        
+                        if story_content:
+                            # Rebuild the final display URL
+                            final_title = page_data["title"].replace(" ", "_")
+                            page_url = f"https://{wiki_slug.lower()}.fandom.com/wiki/{urllib.parse.quote(final_title)}"
+                            return "\n\n".join(story_content), page_url
         except Exception:
             continue
             
@@ -90,6 +96,7 @@ def get_raw_lore(wiki_slug, ep_title):
 
 # --- UI ---
 st.title("📖 TV Vault Reader")
+st.caption("Powered by MediaWiki API")
 
 query = st.text_input("Search for a show:", placeholder="e.g. Invincible")
 
@@ -109,27 +116,33 @@ if query:
 
             if st.button("🔓 Extract Full Lore"):
                 api_url = f"https://api.tvmaze.com/shows/{show_data['id']}/episodebynumber?season={s_val}&number={ep_val}"
-                api_res = requests.get(api_url).json()
+                api_res = requests.get(api_url)
                 
-                if "name" in api_res:
-                    raw_text, found_url = get_raw_lore(wiki_slug, api_res['name'])
+                if api_res.status_code == 200:
+                    api_data = api_res.json()
                     
-                    if raw_text:
-                        st.subheader(api_res['name'])
-                        if api_res.get('image'): st.image(api_res['image']['medium'])
+                    if "name" in api_data:
+                        raw_text, found_url = get_raw_lore(wiki_slug, api_data['name'])
                         
-                        if st.button("🔊 Play Audio"):
-                            tts = gTTS(text=raw_text, lang='en')
-                            tts.save("lore.mp3")
-                            with open("lore.mp3", "rb") as f:
-                                b64 = base64.b64encode(f.read()).decode()
-                                st.markdown(f'<audio controls autoplay style="width:100%"><source src="data:audio/mp3;base64,{b64}" type="audio/mp3"></audio>', unsafe_allow_html=True)
+                        if raw_text:
+                            st.subheader(api_data['name'])
+                            if api_data.get('image'): st.image(api_data['image']['medium'])
+                            
+                            if st.button("🔊 Play Audio"):
+                                with st.spinner("Synthesizing audio..."):
+                                    tts = gTTS(text=raw_text, lang='en')
+                                    tts.save("lore.mp3")
+                                    with open("lore.mp3", "rb") as f:
+                                        b64 = base64.b64encode(f.read()).decode()
+                                        st.markdown(f'<audio controls autoplay style="width:100%"><source src="data:audio/mp3;base64,{b64}" type="audio/mp3"></audio>', unsafe_allow_html=True)
 
-                        st.markdown(f'<div class="lore-box">{raw_text}</div>', unsafe_allow_html=True)
-                        st.caption(f"Source: {found_url}")
+                            st.markdown(f'<div class="lore-box">{raw_text}</div>', unsafe_allow_html=True)
+                            st.caption(f"Source: [Direct API Link]({found_url})")
+                        else:
+                            st.error(f"Text not found. Fandom's database returned empty for {wiki_slug}.")
                     else:
-                        st.error("Story section not found. The page layout might be entirely blank or blocked.")
+                        st.error("Episode name not found in the database.")
                 else:
-                    st.error("Episode not found in database.")
+                    st.error("Could not locate this specific episode number.")
     except Exception as e:
         st.error(f"Error: {e}")
