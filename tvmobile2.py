@@ -81,7 +81,7 @@ if query:
 
                             # THE PROMPT (Using s_val and ep_val exclusively)
                             prompt = f"""
-                            Recap Season {s_val}, Episode {ep_val} of {selected_show}.
+                            Recap Season {s_val}, Episode {ep_val} of {selected_show} as if you are a tv specialist.
                             Title: {data['name']}
                             Guests: {guests}
                             Summary: {clean_summary}
@@ -97,6 +97,7 @@ if query:
         - A informative opening acknowledging the episode title and where we are in the season.
         - A setup of where the main characters are at the start of the episode.
         - The main plot points or conflict (use a detailed bulleted list with dashes). CRITICAL: Use your own internal knowledge to fill in any major subplots, romantic developments, or notable guest characters that are missing from the raw data.        - How the episode ends. where do the characters end up?
+        - List all main plot points of episode so if I havent seen it it'll fill me in.
         - A quick piece of trivia about the episode, guest stars
         - How it ties into the larger season arc.
         
@@ -172,6 +173,7 @@ if query:
         st.error(f"App Error: {e}")
 else:
     st.info("Enter a show title to begin.")
+
 
 
 
