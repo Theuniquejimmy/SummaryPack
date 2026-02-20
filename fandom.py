@@ -122,8 +122,11 @@ if query:
                             INSTRUCTIONS:
                             1. Analyze the entire season's arc. Discuss how the status quo changed from the first to the last episode.
                             2. Provide in-depth analysis of character development for all lead roles.
-                            3. Be expansive and detailed. Avoid a summary; write a narrative.
-                            4. No bolding. End with a major behind-the-scenes breakdown.
+                            3. Be expansive and detailed.
+                            4. No bolding.
+                            5. Identify at least TWO important plot point for every episode of the season so, if season has 25 epsiodes 50 plot points at least and write them with great detail that if you havn't seen the episode you'd know the main plot. Cite each with episode tag its from "S*E*" and list them in order of episode.
+                            6. What I need to know for next season.
+
                             """
                             if target.get('image'): st.image(target['image']['medium'])
                         else: st.error("Not found."); st.stop()
@@ -144,3 +147,4 @@ if query:
     except Exception as e: st.error(f"Error: {e}")
 else:
     st.info("Search a show to begin your deep-dive.")
+
