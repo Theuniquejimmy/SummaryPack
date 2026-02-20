@@ -86,11 +86,19 @@ if query:
                             Guests: {guests}
                             Summary: {clean_summary}
 
-                            RULES:
-                            1. Use internal knowledge for subplots (like Paolo or character-specific drama).
-                            2. Conversational tone, short paragraphs, no spoilers for the end.
-                            3. Use dashes (-) for bullets. NO BOLDING.
-                            4. End with one interesting trivia fact about this episode.
+                             CRITICAL RULES:
+        1. NO SPOILERS for future episodes, but can spoil current episode.
+        2. Write in a conversational, informative tone.
+        3. Break the text into short, digestible paragraphs. 
+        4. Use standard dashes (-) for bullet points. 
+        5. Do NOT use Markdown formatting (like ** or #) since this will be displayed in a plain text window.
+        
+        Structure your response naturally, with this flow:
+        - A informative opening acknowledging the episode title and where we are in the season.
+        - A setup of where the main characters are at the start of the episode.
+        - The main plot points or conflict (use a detailed bulleted list with dashes). CRITICAL: Use your own internal knowledge to fill in any major subplots, romantic developments, or notable guest characters that are missing from the raw data.        - How the episode ends. where do the characters end up?
+        - A quick piece of trivia about the episode, guest stars, or how it ties into the larger season arc.
+        
                             """
                         else:
                             st.error(f"Episode S{s_val}E{ep_val} not found.")
@@ -116,9 +124,11 @@ if query:
                             Episode Context: {full_text[:3500]}
                             
                             RULES:
-                            1. Identify main themes and character growth across the season.
-                            2. Friendly, conversational tone. No bolding. No spoilers for next season.
-                            3. End with a behind-the-scenes fact about this season.
+                            1. Identify major story arcs and character growth over the year.
+                            2. Friendly, conversational tone.
+                            3. NO MARKDOWN (no bolding or hashtags). Use dashes (-) for bullets.
+                            4. Do not spoil the next season's cliffhanger.
+                            5. Identify at least one to two important plot point per episode of the season
                             """
                         else:
                             st.error(f"Season {s_val} not found.")
@@ -143,3 +153,4 @@ if query:
         st.error(f"App Error: {e}")
 else:
     st.info("Enter a show title to begin.")
+
