@@ -146,7 +146,7 @@ if query:
                             2. Friendly, conversational tone.
                             3. NO MARKDOWN (no bolding or hashtags). Use dashes (-) for bullets.
                             4. Do not spoil the next season's cliffhanger.
-                            5. Identify at least TWO important plot point for every episode of the season so, if season has 25 epsiodes 50 plot points at least. Cite each with episode tag its from "S*E*" and list them in order of episode.
+                            5. Identify at least TWO important plot point for every episode of the season so, if season has 25 epsiodes 50 plot points at least and write them with great detail that if you havn't seen the episode you'd know the main plot. Cite each with episode tag its from "S*E*" and list them in order of episode.
                             6. End with a thourough summary of the season hitting the most important plot points. 
                             7. What I need to know for next season.
                             """
@@ -173,6 +173,7 @@ if query:
         st.error(f"App Error: {e}")
 else:
     st.info("Enter a show title to begin.")
+
 
 
 
