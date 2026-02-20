@@ -12,7 +12,7 @@ GROQ_KEY = st.secrets.get("GROQ_KEY") or os.environ.get("GROQ_KEY")
 
 st.set_page_config(page_title="TV Vault Pro", page_icon="📺", layout="centered")
 
-# --- SCRAPER: FULL SECTION FETCH ---
+# --- GREEDY SCRAPER: GETS EVERYTHING UNTIL TRIVIA/CAST ---
 def get_fandom_data(show_name, ep_title):
     try:
         wiki_slug = show_name.replace(" ", "").lower()
@@ -21,28 +21,31 @@ def get_fandom_data(show_name, ep_title):
         headers = {'User-Agent': 'Mozilla/5.0'}
         res = requests.get(url, headers=headers, timeout=5)
         
-        # Fuzzy check if the primary URL fails
         if res.status_code != 200:
             res = requests.get(f"{url}_(episode)", headers=headers, timeout=5)
 
         if res.status_code == 200:
             soup = BeautifulSoup(res.text, 'html.parser')
-            # Identify the start of the plot/synopsis section
-            synopsis_span = soup.find('span', id=lambda x: x and x in ['Synopsis', 'Summary', 'Plot', 'Episode_Summary'])
+            # Look for the start of the plot
+            start_node = soup.find('span', id=lambda x: x and x in ['Synopsis', 'Summary', 'Plot', 'Episode_Summary'])
             
-            if synopsis_span:
+            if start_node:
                 content = []
-                # Start at the parent header (usually <h2> or <h3>)
-                current_element = synopsis_span.find_parent()
+                # Get the header containing the span (usually an h2)
+                current = start_node.find_parent()
                 
-                # Iterate through siblings until the next header is reached
-                for sibling in current_element.find_next_siblings():
+                # Loop through every sibling until we hit the "Cast" or "Trivia" section
+                for sibling in current.find_next_siblings():
+                    # Stop if we hit a section that isn't plot-related
                     if sibling.name in ['h2', 'h3']:
-                        break
+                        header_text = sibling.get_text().lower()
+                        if any(stop_word in header_text for stop_word in ['cast', 'trivia', 'gallery', 'references', 'videos']):
+                            break
+                    
                     if sibling.name == 'p':
-                        text = sibling.get_text(strip=True)
-                        if text:
-                            content.append(text)
+                        content.append(sibling.get_text().strip())
+                    elif sibling.name in ['ul', 'ol']:
+                        content.append(sibling.get_text().strip())
                 
                 return "\n\n".join(content)
     except:
@@ -50,11 +53,11 @@ def get_fandom_data(show_name, ep_title):
     return None
 
 st.title("📺 TV Vault Pro")
-st.subheader("Deep-Dive AI Recaps")
+st.subheader("Exhaustive AI Deep-Dives")
 
 # --- UI ---
 mode = st.radio("Mode:", ["Single Episode", "Full Season"], horizontal=True)
-query = st.text_input("Search Show:", placeholder="e.g. Gilmore Girls")
+query = st.text_input("Search Show:", placeholder="e.g. Invincible")
 
 if query:
     try:
@@ -71,33 +74,29 @@ if query:
             else:
                 s_val = st.number_input("Season", min_value=1, value=1)
 
-            if st.button(f"Generate Exhaustive {mode} Recap"):
-                with st.spinner("Processing full lore and analyzing climax..."):
+            if st.button(f"Generate Total Recap"):
+                with st.spinner("Scraping full wiki pages and analyzing the ending..."):
                     if mode == "Single Episode":
                         ep_data = requests.get(f"https://api.tvmaze.com/shows/{show['id']}/episodebynumber?season={s_val}&number={ep_val}").json()
                         if "name" in ep_data:
-                            # Fetch the entire plot section from Fandom
                             lore = get_fandom_data(show['name'], ep_data['name'])
                             if ep_data.get('image'): st.image(ep_data['image']['medium'], use_container_width=True)
                             
-                            # PROMPT: Focus on narrative depth and word count
+                            # PROMPT: Explicit Climax Instructions
                             prompt = f"""
-                            Act as a TV Historian. Provide a high-word-count, exhaustive recap of S{s_val}E{ep_val} of {show['name']}.
-                            Episode Title: {ep_data['name']}
-                            Fandom Deep-Lore (Full Plot Section): {lore}
-                            Database Snippet: {re.sub('<[^<]+>', '', ep_data.get('summary', ''))}
+                            Act as a TV Expert. Write a massive, comprehensive recap of S{s_val}E{ep_val} of {show['name']}.
+                            Title: {ep_data['name']}
+                            FULL WIKI TEXT: {lore}
 
-                            INSTRUCTIONS:
-                            1. Use the Fandom Deep-Lore to provide a beat-by-beat narrative of the entire episode.
-                            2. You MUST include the climax, the final fight/confrontation, and the resolution. Do not stop early.
-                            3. Analyze character motivations and subplots in depth.
-                            4. Use a friendly, conversational, but expert tone.
-                            5. NO BOLDING. No hashtags.
-                            6. End with three specific, high-detail trivia facts.
+                            STRICT INSTRUCTIONS:
+                            1. DO NOT summarize. Write a long, beat-by-beat narrative of the entire episode.
+                            2. You MUST include the ending/climax in vivid detail. 
+                            3. Specifically check for "post-credits" or "twist endings" (like the Omni-Man fight in Invincible) and describe them thoroughly.
+                            4. If the Wiki text is long, use all of it to flesh out the action scenes.
+                            5. NO BOLDING. Natural, expert tone.
+                            6. End with 3 trivia facts.
                             """
-                        else:
-                            st.error("Episode not found.")
-                            st.stop()
+                        else: st.error("Not found."); st.stop()
                     else:
                         # Full Season Recap
                         seasons = requests.get(f"https://api.tvmaze.com/shows/{show['id']}/seasons").json()
@@ -105,24 +104,14 @@ if query:
                         if target:
                             eps = requests.get(f"https://api.tvmaze.com/seasons/{target['id']}/episodes").json()
                             context = " ".join([re.sub('<[^<]+>', '', e.get('summary', '')) for e in eps])
-                            prompt = f"""
-                            Write an exhaustive narrative recap for {show['name']} Season {s_val}. 
-                            Context: {context[:8000]}
-                            
-                            INSTRUCTIONS:
-                            1. Describe the overarching story arcs and character evolution in massive detail.
-                            2. Focus heavily on the season finale and how it resolves the season's tension.
-                            3. Friendly tone, no bolding, be expansive and narrative-driven.
-                            """
+                            prompt = f"Write a long narrative for {show['name']} Season {s_val}. Context: {context[:8000]}. Focus on major character deaths and season finales."
                             if target.get('image'): st.image(target['image']['medium'])
-                        else:
-                            st.error("Season not found.")
-                            st.stop()
+                        else: st.error("Not found."); st.stop()
 
-                    # --- EXECUTION: GROQ PRIMARY ---
+                    # --- EXECUTION ---
                     try:
                         g_client = Groq(api_key=GROQ_KEY)
-                        chat = g_client.chat.completions.create(
+                        chat = g_client.chat.complet_req = g_client.chat.completions.create(
                             messages=[{"role": "user", "content": prompt}],
                             model="llama-3.3-70b-versatile",
                         )
@@ -132,7 +121,6 @@ if query:
                         res = m_client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
                         st.write(res.text)
 
-    except Exception as e:
-        st.error(f"App Error: {e}")
+    except Exception as e: st.error(f"Error: {e}")
 else:
-    st.info("Search a show to begin your deep-dive.")
+    st.info("Search a show to begin the deep-dive.")
