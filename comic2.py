@@ -1,3 +1,4 @@
+from duckduckgo_search import DDGS
 import streamlit as st
 import requests
 import os
@@ -137,12 +138,28 @@ def get_issue_data(volume_id, issue_num):
 def generate_ai_summary(issue_data, series_name, issue_num):
     chars = ", ".join([c['name'] for c in (issue_data.get('character_credits') or [])])
     creators = ", ".join([p['name'] for p in (issue_data.get('person_credits') or [])])
-    plot = str(issue_data.get('deck') or issue_data.get('description') or "No data")[:5000]
+    
+    # Grab whatever Comic Vine gave us
+    plot = str(issue_data.get('deck') or issue_data.get('description') or "")[:5000]
+    
+    # --- THE DUCKDUCKGO FAILSAFE ---
+    # If Comic Vine gave us a blank or uselessly short plot, search the web!
+    if len(plot.strip()) < 50:
+        st.toast("🔍 Comic Vine plot missing! Searching the web for backup lore...")
+        try:
+            search_query = f"{series_name} #{issue_num} comic plot synopsis {creators}"
+            ddg_results = DDGS().text(search_query, max_results=3)
+            # Combine the search snippets into a makeshift plot
+            web_plot = " ".join([res['body'] for res in ddg_results])
+            plot = f"WEB SEARCH RESULTS (Use this to figure out the plot): {web_plot}"
+        except Exception as e:
+            plot = "No plot data available. Do your best to recall the events from your training data."
     
     prompt = f"""
     Act as a passionate, encyclopedic comic book historian. Your goal is to write a highly detailed, comprehensive deep-dive into {series_name} #{issue_num}. 
     
-    CRITICAL INSTRUCTION: If the "Plot Snippet" below is blank or brief, YOU MUST USE YOUR GOOGLE SEARCH TOOL to look up the exact plot of {series_name} #{issue_num} by {creators} before writing the summary. Do not guess the plot.
+    CRITICAL INSTRUCTION: Pay close attention to the release year in the series name ({series_name}) and the creative team ({creators}). 
+    Do not confuse this with other volumes or eras of the same title. Use the "Plot Snippet" below as your absolute source of truth for what happens in this issue.
     
     Structure your response using Markdown headings for these exact sections:
     
@@ -170,25 +187,20 @@ def generate_ai_summary(issue_data, series_name, issue_num):
     Plot Snippet: {plot}
     """
     
+    # Try Gemini First
     try:
-        # NEW: We are passing the Google Search tool configuration to Gemini!
-        resp = ai_client.models.generate_content(
-            model="gemini-2.0-flash", 
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                tools=[{"google_search": {}}]
-            )
-        )
+        resp = ai_client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
         return resp.text
     except Exception as e:
+        # Failsafe to NVIDIA if Gemini is out of credits
         if nvidia_client:
-            st.caption("ℹ️ *Using NVIDIA Backup*")
+            st.caption("ℹ️ *Gemini unavailable. Using NVIDIA Backup...*")
             comp = nvidia_client.chat.completions.create(
                 model="meta/llama-3.1-70b-instruct", 
                 messages=[{"role": "user", "content": prompt}]
             )
             return comp.choices[0].message.content
-        return "AI Error"
+        return "AI Error: Both primary and backup APIs failed."
 
 # --- NEURAL TTS HELPER ---
 async def generate_neural_audio(text, voice, filename="summary_temp.mp3"):
@@ -359,5 +371,6 @@ if st.session_state.current_summary:
             )
         else:
             st.warning("⚠️ Audio could not be generated.")
+
 
 
