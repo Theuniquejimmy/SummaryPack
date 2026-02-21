@@ -2,6 +2,10 @@ import streamlit as st
 import requests
 import re
 import os
+import io
+import markdown
+from ebooklib import epub
+from gtts import gTTS
 from google import genai
 from groq import Groq
 
@@ -11,6 +15,7 @@ GROQ_KEY = st.secrets.get("GROQ_KEY") or os.environ.get("GROQ_KEY")
 
 st.set_page_config(page_title="TV Vault Pro", page_icon="📺")
 
+# --- CSS STYLING ---
 st.markdown("""
     <style>
     div.stButton > button:first-child {
@@ -24,10 +29,41 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
+# --- HELPER FUNCTIONS ---
+def create_epub_in_memory(show_title, recap_text, is_season, s_val, ep_val):
+    book = epub.EpubBook()
+    
+    # Set Metadata
+    title_str = f"{show_title} - Season {s_val}" if is_season else f"{show_title} - S{s_val}E{ep_val}"
+    book.set_identifier("tvvaultpro_recap")
+    book.set_title(title_str)
+    book.set_language('en')
+    
+    # Convert AI Markdown to HTML for the EPUB
+    html_content = markdown.markdown(recap_text)
+    
+    # Create the single chapter
+    chapter = epub.EpubHtml(title='Recap', file_name='recap.xhtml', lang='en')
+    chapter.content = f"<h1>{title_str}</h1>{html_content}"
+    
+    book.add_item(chapter)
+    
+    # Build the book structure
+    book.toc = (chapter,)
+    book.add_item(epub.EpubNcx())
+    book.add_item(epub.EpubNav())
+    book.spine = ['nav', chapter]
+    
+    # Write to memory buffer
+    mem_file = io.BytesIO()
+    epub.write_epub(mem_file, book)
+    
+    return mem_file.getvalue()
+
+# --- MAIN APP ---
 st.title("📺 TV Vault Pro")
 
 app_mode = st.radio("Recap Mode:", ["Single Episode", "Full Season"], horizontal=True)
-
 query = st.text_input("Search for a show", placeholder="e.g. Buffy the Vampire Slayer")
 
 if query:
@@ -43,9 +79,8 @@ if query:
                 if not s_data:
                     continue
                 
-                # NO SPLIT COMMAND USED HERE
+                # Safe date handling to prevent crashes
                 p_date = s_data.get('premiered', '')
-                # If p_date is valid and has at least 4 characters, take the first 4 (the year)
                 year = p_date[:4] if (p_date and len(p_date) >= 4) else "????"
                 
                 name = s_data.get('name', 'Unknown Title')
@@ -57,6 +92,7 @@ if query:
                 
             selected_show = st.selectbox("Select Show", options=list(show_options.keys()))
             show_id = show_options[selected_show]
+            clean_title = selected_show.split(" (")[0]
             
             # --- INPUTS ---
             if app_mode == "Single Episode":
@@ -76,7 +112,6 @@ if query:
                         ep_url = f"https://api.tvmaze.com/shows/{show_id}/episodebynumber?season={s_val}&number={ep_val}&embed=guestcast"
                         data = requests.get(ep_url).json()
                         
-                        # Fix for TVMaze returning a 404 Not Found JSON object
                         if data.get("status") == 404 or "id" not in data:
                             st.error(f"Episode S{s_val}E{ep_val} not found in the TVMaze database.")
                             st.stop()
@@ -91,7 +126,7 @@ if query:
                         guests = ", ".join([f"{g['character']['name']} ({g['person']['name']})" for g in guest_list]) or "No major guests."
 
                         prompt = f"""
-                        Recap Season {s_val}, Episode {ep_val} of {selected_show} as if you are a tv specialist.
+                        Recap Season {s_val}, Episode {ep_val} of {clean_title} as if you are a tv specialist.
                         Title: {data.get('name', 'Unknown')}
                         Guests: {guests}
                         Summary: {clean_summary}
@@ -101,9 +136,8 @@ if query:
                         2. Write in a conversational, informative tone.
                         3. Break the text into short, digestible paragraphs. 
                         4. Use standard dashes (-) for bullet points. 
-                        5. Do NOT use Markdown formatting (like ** or #).
-                        6. Write a high-detail, conversational recap.
-                        7. Use the lore notes to mention subplots or specific character beats.
+                        5. Write a high-detail, conversational recap.
+                        6. Use the lore notes to mention subplots or specific character beats.
                         
                         Structure your response naturally, with this flow:
                         - A informative opening acknowledging the episode title and where we are in the season.
@@ -133,7 +167,7 @@ if query:
                         full_text = " ".join([re.sub('<[^<]+>', '', e.get('summary') or "") for e in ep_list])
                         
                         prompt = f"""
-                        Act as an authentic, adaptive AI collaborator with a touch of wit. Provide a thorough, insightful recap of {selected_show} Season {s_val} as if i'v never seen it and need to prepare myself to watch the next season.
+                        Act as an authentic, adaptive AI collaborator with a touch of wit. Provide a thorough, insightful recap of {clean_title} Season {s_val} as if i'v never seen it and need to prepare myself to watch the next season.
                         Episode Context: {full_text[:3500]}
                         
                         Your response must follow these structural guidelines:
@@ -142,7 +176,7 @@ if query:
                         RULES:
                         1. Identify major story arcs and character growth over the year.
                         2. Friendly, conversational tone.
-                        3. NO MARKDOWN (no bolding or hashtags). Use dashes (-) for bullets.
+                        3. Use dashes (-) for bullets.
                         4. Do not spoil the next season's cliffhanger.
                         5. Identify at least TWO important plot point for every episode of the season. Cite each with episode tag its from "S*E*" and list them in order of episode.
                         6. End with a thourough summary of the season hitting the most important plot points. 
@@ -151,10 +185,12 @@ if query:
                         """
 
                     # --- AI CALL (Gemini with Groq Fallback) ---
+                    final_text = ""
                     try:
                         client = genai.Client(api_key=GEMINI_KEY)
                         res = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
-                        st.write(res.text)
+                        final_text = res.text
+                        st.write(final_text)
                     except Exception as ai_err:
                         st.warning(f"Gemini failed ({ai_err}), falling back to Groq...")
                         groq_client = Groq(api_key=GROQ_KEY)
@@ -162,7 +198,47 @@ if query:
                             messages=[{"role": "user", "content": prompt}],
                             model="llama-3.3-70b-versatile",
                         )
-                        st.write(chat.choices[0].message.content)
+                        final_text = chat.choices[0].message.content
+                        st.write(final_text)
+
+                    # --- AUDIO AND EPUB GENERATION ---
+                    st.markdown("---")
+                    st.success("Vault analysis complete! Listen to the recap or download it for your e-reader below.")
+                    
+                    col_a, col_b = st.columns(2)
+                    
+                    with col_a:
+                        with st.spinner("Compiling audio..."):
+                            try:
+                                tts = gTTS(text=final_text, lang='en', slow=False)
+                                audio_fp = io.BytesIO()
+                                tts.write_to_fp(audio_fp)
+                                st.audio(audio_fp, format='audio/mp3')
+                            except Exception as e:
+                                st.error(f"Audio generation failed: {e}")
+                                
+                    with col_b:
+                        is_full_season = (app_mode == "Full Season")
+                        safe_file_name = clean_title.replace(" ", "_").replace(":", "")
+                        file_name = f"{safe_file_name}_S{s_val}_Recap.epub" if is_full_season else f"{safe_file_name}_S{s_val}E{ep_val}_Recap.epub"
+                        
+                        try:
+                            epub_data = create_epub_in_memory(
+                                show_title=clean_title, 
+                                recap_text=final_text, 
+                                is_season=is_full_season, 
+                                s_val=s_val, 
+                                ep_val=ep_val
+                            )
+                            
+                            st.download_button(
+                                label="📥 Download as EPUB",
+                                data=epub_data,
+                                file_name=file_name,
+                                mime="application/epub+zip"
+                            )
+                        except Exception as e:
+                            st.error(f"EPUB generation failed: {e}")
 
         else:
             st.warning("No shows found.")
