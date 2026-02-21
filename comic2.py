@@ -121,7 +121,13 @@ def fetch_volumes(query):
 @st.cache_data
 def get_issue_data(volume_id, issue_num):
     url = "https://comicvine.gamespot.com/api/issues/"
-    params = {"api_key": COMIC_VINE_KEY, "format": "json", "filter": f"volume:{volume_id},issue_number:{issue_num}", "field_list": "name,deck,description,character_credits,image"}
+    # NEW: Added 'person_credits' to the field_list to grab the writers/artists
+    params = {
+        "api_key": COMIC_VINE_KEY, 
+        "format": "json", 
+        "filter": f"volume:{volume_id},issue_number:{issue_num}", 
+        "field_list": "name,deck,description,character_credits,person_credits,image"
+    }
     try:
         res = requests.get(url, params=params, headers={"User-Agent": "ComicVault/1.0"}).json()
         return res.get('results', [])[0] if res.get('results') else None
@@ -129,35 +135,41 @@ def get_issue_data(volume_id, issue_num):
 
 def generate_ai_summary(issue_data, series_name, issue_num):
     chars = ", ".join([c['name'] for c in (issue_data.get('character_credits') or [])])
+    # NEW: Extract the creators
+    creators = ", ".join([p['name'] for p in (issue_data.get('person_credits') or [])])
     plot = str(issue_data.get('deck') or issue_data.get('description') or "No data")[:5000]
     
+    # NEW: Upgraded prompt that anchors the AI to the specific year and creators
     prompt = f"""
     Act as a passionate, encyclopedic comic book historian. Your goal is to write a highly detailed, comprehensive deep-dive into {series_name} #{issue_num}. 
     
-    The raw data below might be brief, but you MUST use your extensive internal knowledge of comic lore to expand on it. Structure your response using Markdown headings for these exact sections:
+    CRITICAL ANCHOR: Pay close attention to the release year in the series name ({series_name}) and the creative team ({creators}). 
+    If the "Plot Snippet" below is blank or brief, you MUST use your internal knowledge of this specific era/run to write the summary. Do NOT confuse this with other volumes or eras of the same title.
+    
+    Structure your response using Markdown headings for these exact sections:
     
     ### 🌍 Context & Background
-    Explain what was happening in the comic universe and the character's life leading up to this issue. Who is the creative team, and what era/run is this?
+    Explain what was happening in the comic universe leading up to this issue. Who is the creative team, and what run is this?
     
     ### 📖 Detailed Plot Summary
-    Provide an exhaustive, multi-paragraph recounting of the issue's events. Do not just give a blurb; narrate the key actions, conflicts, and character dynamics.
+    Provide an exhaustive, multi-paragraph recounting of the issue's events. 
     
     ### 💥 Key Moments
     Use bullet points to list the most iconic panels, character beats, or reveals in this specific issue.
     
     ### 🏛️ Legacy & Significance
-    Why does this issue matter? Discuss its impact, first appearances, or how it sets up the future (without spoiling specific future plotlines).
+    Why does this issue matter? Discuss its impact or how it sets up the future.
     
     RULES:
-    - Your output MUST be a substantial, long-form read (at least 500-800 words).
-    - Be enthusiastic, professional, and authoritative.
-    - Do NOT be constrained by the briefness of the "Plot Snippet".
+    - Output must be 500-800 words.
+    - Be enthusiastic and authoritative.
     
     RAW DATA:
     Series: {series_name}
     Issue: {issue_num}
-    Plot Snippet: {plot}
+    Creators: {creators}
     Characters Involved: {chars}
+    Plot Snippet: {plot}
     """
     
     try:
@@ -342,3 +354,4 @@ if st.session_state.current_summary:
             )
         else:
             st.warning("⚠️ Audio could not be generated.")
+
