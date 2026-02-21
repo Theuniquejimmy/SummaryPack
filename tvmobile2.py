@@ -31,24 +31,31 @@ st.title("📺 TV Vault Pro")
 # --- MODE SELECTION ---
 app_mode = st.radio("Recap Mode:", ["Single Episode", "Full Season"], horizontal=True)
 
-# --- SEARCH ---
-query = st.text_input("Search for a show", placeholder="e.g. Friends")
-
+# Change your search block to this:
 if query:
     try:
-        # 1. Show Search
-        resp = requests.get(f"https://api.tvmaze.com/search/shows?q={query}").json()
+        # Use a more flexible search URL
+        # We'll try the standard search first
+        search_url = f"https://api.tvmaze.com/search/shows?q={query}"
+        resp = requests.get(search_url).json()
         
+        # If no results, try 'singlesearch' which is more aggressive
+        if not resp:
+            single_resp = requests.get(f"https://api.tvmaze.com/singlesearch/shows?q={query}").json()
+            if single_resp:
+                # Format it to look like the search result list
+                resp = [{'show': single_resp}]
+
         if resp:
+            # Your existing selection logic...
             show_options = {}
             for i in resp:
                 s_data = i['show']
                 p_date = s_data.get('premiered')
                 year = p_date.split('-')[0] if p_date else "????"
                 show_options[f"{s_data['name']} ({year})"] = s_data['id']
-                
-            selected_show = st.selectbox("Select Show", options=list(show_options.keys()))
-            show_id = show_options[selected_show]
+            
+            selected_show = st.selectbox("Select Show", options=list(show_options.keys())
             
             # --- INPUTS: Defining s_val and ep_val clearly ---
             if app_mode == "Single Episode":
@@ -175,4 +182,5 @@ if query:
         st.error(f"App Error: {e}")
 else:
     st.info("Enter a show title to begin.")
+
 
