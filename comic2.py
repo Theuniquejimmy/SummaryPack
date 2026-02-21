@@ -122,14 +122,25 @@ async def generate_edge_audio(text, voice, speed):
     if not text or len(text.strip()) == 0:
         return None
     
+    # 1. HEAVY SANITIZATION: Strip out characters that break Microsoft's SSML
+    # Remove markdown asterisks, hashes, underscores, and backticks
+    clean = re.sub(r'[*#_~`]', '', text)
+    # Replace ampersands and angle brackets which crash the XML parser
+    clean = clean.replace("&", "and").replace("<", "").replace(">", "")
+    clean = clean.strip()
+    
+    if not clean:
+        return None
+
+    # 2. FOOLPROOF SPEED FORMATTING
     try:
-        # FIX: If speed is exactly normal, don't send a rate modifier at all
         if speed == 1.0:
-            communicate = edge_tts.Communicate(text, voice)
+            communicate = edge_tts.Communicate(clean, voice)
         else:
-            pct = int((speed - 1) * 100)
-            speed_str = f"{'+' if pct > 0 else ''}{pct}%"
-            communicate = edge_tts.Communicate(text, voice, rate=speed_str)
+            # Round the percentage to prevent weird floating point decimals
+            pct = int(round((speed - 1.0) * 100))
+            speed_str = f"+{pct}%" if pct > 0 else f"{pct}%"
+            communicate = edge_tts.Communicate(clean, voice, rate=speed_str)
             
         audio_data = b""
         async for chunk in communicate.stream():
@@ -139,9 +150,9 @@ async def generate_edge_audio(text, voice, speed):
         return audio_data if audio_data else None
         
     except Exception as e:
-        # FIX: Surface the exact error to the UI instead of hiding it in the terminal
         st.error(f"Network/TTS Error Details: {e}")
         return None
+        
 # --- UI ---
 st.title("📚 Comic Vault Analyzer")
 
@@ -225,4 +236,5 @@ if st.session_state.current_summary:
             st.audio(st.session_state.audio_bytes, format='audio/mp3')
         else:
             st.warning("⚠️ Audio could not be generated for this summary.")
+
 
