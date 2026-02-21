@@ -329,4 +329,44 @@ try:
                 """, unsafe_allow_html=True)
 
                 st.subheader(f"S{st.session_state.s_val}E{st.session_state.ep_val}: {st.session_state.ep_name}")
-                if st.session_state.image_url: st.image(st.session
+                if st.session_state.image_url: st.image(st.session_state.image_url, use_container_width=True)
+                
+                if st.button("🔊 Generate Audio Narration", use_container_width=True):
+                    with st.spinner(f"Synthesizing {voice_setting.split(' ')[0]}'s voice..."):
+                        clean_tts_text = BeautifulSoup(st.session_state.lore_text, "html.parser").get_text(separator=' ')
+                        create_audio(clean_tts_text, voice_setting)
+                        with open("lore.mp3", "rb") as f:
+                            st.session_state.b64_audio = base64.b64encode(f.read()).decode()
+
+                if st.session_state.b64_audio:
+                    realtime_player_html = f"""
+                    <!DOCTYPE html>
+                    <html>
+                    <head><style>body {{ margin: 0; padding: 0; background-color: transparent; }} .player-box {{ background-color: {current_theme['player']}; padding: 15px; border-radius: 10px; border-left: 4px solid {current_theme['accent']}; font-family: sans-serif; color: {current_theme['text']}; }}</style></head>
+                    <body>
+                        <div class="player-box">
+                            <audio id="narrator-audio" controls autoplay style="width: 100%;"><source src="data:audio/mp3;base64,{st.session_state.b64_audio}" type="audio/mp3"></audio>
+                            <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 12px;">
+                                <label for="speed-slider" style="font-size: 0.95rem; font-weight: 500;">🏃 Playback Speed: <span id="speed-display">1.0x</span></label>
+                                <input type="range" id="speed-slider" min="0.5" max="2.0" step="0.1" value="1.0" style="width: 50%; cursor: pointer;">
+                            </div>
+                        </div>
+                        <script>
+                            const audio = document.getElementById("narrator-audio");
+                            const slider = document.getElementById("speed-slider");
+                            const display = document.getElementById("speed-display");
+                            slider.addEventListener("input", function() {{ audio.playbackRate = this.value; display.textContent = parseFloat(this.value).toFixed(1) + "x"; }});
+                        </script>
+                    </body>
+                    </html>
+                    """
+                    components.html(realtime_player_html, height=120)
+
+                st.markdown(f'<div class="pro-reader">{st.session_state.lore_text}</div>', unsafe_allow_html=True)
+                st.caption(f"Source: [Link]({st.session_state.wiki_url})")
+                
+                st.divider()
+                st.button(f"⏭️ Load Season {st.session_state.s_val}, Episode {st.session_state.ep_val + 1}", on_click=load_next_episode, use_container_width=True)
+
+except Exception as e:
+    st.error(f"System Error: {e}")
