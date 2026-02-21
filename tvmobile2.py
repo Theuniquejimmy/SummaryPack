@@ -46,13 +46,12 @@ if query:
                 if not s_data:
                     continue
                 
-                # --- THE FIX: Bulletproof date handling ---
+                # --- THE NUCLEAR FIX ---
+                # We completely remove .split() 
+                # If there is a date, we just grab the first 4 characters (e.g., "1997").
+                # If it's empty or null, we assign "????".
                 p_date = s_data.get('premiered')
-                # Explicitly check if it's a string before splitting
-                if isinstance(p_date, str) and '-' in p_date:
-                    year = p_date.split('-')[0]
-                else:
-                    year = "????"
+                year = p_date[:4] if p_date else "????"
                 
                 name = s_data.get('name', 'Unknown Title')
                 show_options[f"{name} ({year})"] = s_data.get('id')
@@ -179,3 +178,4 @@ if query:
         st.error(f"App Error: {e}")
 else:
     st.info("Enter a show title to begin.")
+
