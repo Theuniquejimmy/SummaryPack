@@ -121,22 +121,27 @@ def generate_ai_summary(issue_data, series_name, issue_num):
 async def generate_edge_audio(text, voice, speed):
     if not text or len(text.strip()) == 0:
         return None
-        
-    pct = int((speed - 1) * 100)
-    speed_str = f"{'+' if pct >= 0 else ''}{pct}%"
     
     try:
-        communicate = edge_tts.Communicate(text, voice, rate=speed_str)
+        # FIX: If speed is exactly normal, don't send a rate modifier at all
+        if speed == 1.0:
+            communicate = edge_tts.Communicate(text, voice)
+        else:
+            pct = int((speed - 1) * 100)
+            speed_str = f"{'+' if pct > 0 else ''}{pct}%"
+            communicate = edge_tts.Communicate(text, voice, rate=speed_str)
+            
         audio_data = b""
         async for chunk in communicate.stream():
             if chunk["type"] == "audio":
                 audio_data += chunk["data"]
         
         return audio_data if audio_data else None
+        
     except Exception as e:
-        print(f"TTS Error: {e}")
+        # FIX: Surface the exact error to the UI instead of hiding it in the terminal
+        st.error(f"Network/TTS Error Details: {e}")
         return None
-
 # --- UI ---
 st.title("📚 Comic Vault Analyzer")
 
@@ -220,3 +225,4 @@ if st.session_state.current_summary:
             st.audio(st.session_state.audio_bytes, format='audio/mp3')
         else:
             st.warning("⚠️ Audio could not be generated for this summary.")
+
