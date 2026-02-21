@@ -141,8 +141,13 @@ def generate_ai_summary(issue_data, series_name, issue_num):
     if len(plot.strip()) < 50:
         st.toast("🔍 Comic Vine plot missing! Scraping the Fandom Wiki...")
         try:
-            search_query = f"site:fandom.com {series_name} #{issue_num} {creators} synopsis"
-            ddg_results = DDGS().text(search_query, max_results=3)
+            from duckduckgo_search import DDGS
+            
+            # SANITIZE THE QUERY: Remove # and () so the search engine doesn't break
+            clean_series = re.sub(r'[^a-zA-Z0-9\s]', '', series_name)
+            search_query = f"site:marvel.fandom.com {clean_series} issue {issue_num} synopsis"
+            
+            ddg_results = DDGS().text(search_query, max_results=5)
             if ddg_results:
                 web_plot = " ".join([res['body'] for res in ddg_results])
                 plot = f"WIKI SEARCH RESULTS (Use this to figure out the plot): {web_plot}"
@@ -184,7 +189,8 @@ def generate_ai_summary(issue_data, series_name, issue_num):
     """
     
     try:
-        # Try Gemini First with Google Search built-in
+        # Try Gemini First
+        from google.genai import types
         resp = ai_client.models.generate_content(
             model="gemini-2.0-flash", 
             contents=prompt,
@@ -194,7 +200,7 @@ def generate_ai_summary(issue_data, series_name, issue_num):
         )
         return resp.text
     except Exception as e:
-        # Failsafe to NVIDIA if Gemini is out of credits
+        # Failsafe to NVIDIA Backup
         if nvidia_client:
             st.caption("ℹ️ *Gemini unavailable. Using NVIDIA Backup...*")
             try:
@@ -206,7 +212,6 @@ def generate_ai_summary(issue_data, series_name, issue_num):
             except Exception as nvidia_err:
                  return f"NVIDIA Error: {nvidia_err}"
         return "AI Error: Both primary and backup APIs failed."
-
 # --- NEURAL TTS HELPER ---
 async def generate_neural_audio(text, voice, filename="summary_temp.mp3"):
     communicate = edge_tts.Communicate(text, voice)
@@ -376,3 +381,4 @@ if st.session_state.current_summary:
             )
         else:
             st.warning("⚠️ Audio could not be generated.")
+
