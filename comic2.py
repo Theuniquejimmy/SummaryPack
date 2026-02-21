@@ -2,7 +2,6 @@ import streamlit as st
 import requests
 import os
 import re
-import io
 import asyncio
 import edge_tts
 from google import genai
@@ -33,6 +32,8 @@ if "current_img" not in st.session_state:
     st.session_state.current_img = None
 if "current_title" not in st.session_state:
     st.session_state.current_title = None
+if "audio_bytes" not in st.session_state:
+    st.session_state.audio_bytes = None
 
 # --- CALLBACKS ---
 def prev_issue():
@@ -88,15 +89,31 @@ def get_issue_data(volume_id, issue_num):
 
 def generate_ai_summary(issue_data, series_name, issue_num):
     chars = ", ".join([c['name'] for c in (issue_data.get('character_credits') or [])])
-    plot = str(issue_data.get('deck') or issue_data.get('description') or "No data")[:9000]
-    prompt = f"Expert comic historian deep-dive: {series_name} #{issue_num}. Sections: Context, Plot, Key Moments, Significance. No spoilers. No Markdown. Plot: {plot}. Characters: {chars}"
+    plot = str(issue_data.get('deck') or issue_data.get('description') or "No data")[:5000]
+    
+    prompt = f"""
+    Act as an expert comic book historian giving a deep-dive, comprehensive summary of {series_name} #{issue_num}. 
+    
+    Structure your response with these specific sections:
+    - CONTEXT: Where does this fit in the character's history?
+    - DETAILED PLOT: A thorough breakdown of the events.
+    - KEY MOMENTS: Important reveals or beats.
+    - SIGNIFICANCE: Why this issue matters.
+    
+    RULES: Write at least 4-5 substantial paragraphs. No spoilers for future issues. No Markdown formatting (like ** or #).
+    DATA: {series_name} #{issue_num}. Plot: {plot}. Characters: {chars}
+    """
+    
     try:
         resp = ai_client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
         return resp.text
-    except:
+    except Exception as e:
         if groq_client:
             st.caption("ℹ️ *Using Groq Backup*")
-            comp = groq_client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}])
+            comp = groq_client.chat.completions.create(
+                model="llama-3.3-70b-versatile", 
+                messages=[{"role": "user", "content": prompt}]
+            )
             return comp.choices[0].message.content
         return "AI Error"
 
@@ -181,18 +198,25 @@ if query and 'vid' in locals() and trigger:
             if clean_text:
                 audio = asyncio.run(generate_edge_audio(clean_text, voice_map[sel_voice_label], v_speed))
                 st.session_state.audio_bytes = audio
+            else:
+                st.session_state.audio_bytes = None
         else:
             st.error("Issue not found.")
 
 if st.session_state.current_summary:
     col_a, col_b = st.columns([1, 2])
     with col_a:
-        if st.session_state.current_img: st.image(st.session_state.current_img)
+        if st.session_state.current_img: 
+            st.image(st.session_state.current_img)
     with col_b:
         st.subheader(st.session_state.current_title)
-        with st.container(border=True): st.markdown(st.session_state.current_summary)
+        with st.container(border=True): 
+            st.markdown(st.session_state.current_summary)
         
-        # Audio Player
-        if "audio_bytes" in st.session_state and st.session_state.audio_bytes:
+        # Audio Player UI
+        st.divider()
+        st.caption("🎧 **Listen to the Deep Dive**")
+        if st.session_state.audio_bytes:
             st.audio(st.session_state.audio_bytes, format='audio/mp3')
-
+        else:
+            st.warning("⚠️ Audio could not be generated for this summary.")
