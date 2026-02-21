@@ -16,7 +16,7 @@ WIKI_ALIASES = {
     "Invincible": "amazon-invincible",
     "The Incredible Hulk": "marvelcinematicuniverse",
     "X-Men '97": "xmen97",
-    "The Wheel of Time": "wot",
+    "The Wheel of Time": "wheeloftime",  # <-- FIXED HERE
     "Gilmore Girls": "gilmoregirls",
     "ER": "er"
 }
@@ -313,3 +313,4 @@ try:
 
 except Exception as e:
     st.error(f"System Error: {e}")
+
