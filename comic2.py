@@ -2,8 +2,8 @@ import streamlit as st
 import requests
 import os
 import re
-import asyncio
-import edge_tts
+import tempfile
+import subprocess
 from google import genai
 from openai import OpenAI
 
@@ -120,40 +120,51 @@ def generate_ai_summary(issue_data, series_name, issue_num):
             return comp.choices[0].message.content
         return "AI Error"
 
-# --- IMPROVED EDGE TTS FUNCTION ---
-async def _async_generate_edge_audio(text, voice, speed):
+# --- BULLETPROOF EDGE TTS FUNCTION (SUBPROCESS) ---
+def get_audio_sync(text, voice, speed):
     if not text or len(text.strip()) == 0:
         return None
         
-    # AGGRESSIVE CLEANUP: Keep only letters, numbers, and basic punctuation
-    clean = re.sub(r'[^a-zA-Z0-9\s.,!?\'"-]', '', text)
-    clean = clean.strip()[:4000] # Limit size to prevent server timeout
-    
-    pct = int(round((speed - 1) * 100))
-    speed_str = f"{'+' if pct >= 0 else ''}{pct}%"
+    # Keep only safe characters and limit length
+    clean = re.sub(r'[^a-zA-Z0-9\s.,!?\'"-]', '', text).strip()[:4000]
     
     try:
-        communicate = edge_tts.Communicate(clean, voice, rate=speed_str)
-        audio_data = b""
-        async for chunk in communicate.stream():
-            if chunk["type"] == "audio":
-                audio_data += chunk["data"]
+        # Create a temporary file to hold the MP3
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as fp:
+            temp_path = fp.name
+            
+        # Build the command-line instruction
+        cmd = [
+            "edge-tts",
+            "--voice", voice,
+            "--text", clean,
+            "--write-media", temp_path
+        ]
+        
+        # Only add the speed modifier if it's not exactly 1.0
+        if speed != 1.0:
+            pct = int(round((speed - 1) * 100))
+            speed_str = f"{'+' if pct >= 0 else ''}{pct}%"
+            cmd.extend(["--rate", speed_str])
+            
+        # Run the command silently
+        subprocess.run(cmd, check=True, capture_output=True)
+        
+        # Read the audio bytes back into Streamlit
+        with open(temp_path, "rb") as f:
+            audio_data = f.read()
+            
+        # Clean up the temporary file
+        os.remove(temp_path)
         
         return audio_data if audio_data else None
-    except Exception as e:
-        st.error(f"Edge-TTS Server Error: {e}")
+        
+    except subprocess.CalledProcessError as e:
+        # If the command line tool fails, this grabs the exact error message
+        st.error(f"Edge-TTS CLI Error: {e.stderr.decode()}")
         return None
-
-def get_audio_sync(text, voice, speed):
-    """Safe wrapper to run async code inside Streamlit threads."""
-    try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        audio = loop.run_until_complete(_async_generate_edge_audio(text, voice, speed))
-        loop.close()
-        return audio
     except Exception as e:
-        st.error(f"Streamlit Async Error: {e}")
+        st.error(f"System Error: {e}")
         return None
 
 # --- UI ---
@@ -212,7 +223,7 @@ if query and 'vid' in locals() and trigger:
             if st.session_state.current_title not in st.session_state.history:
                 st.session_state.history.append(st.session_state.current_title)
             
-            # Generate Audio using Safe Sync Wrapper
+            # Generate Audio using Subprocess Sync Wrapper
             if summary:
                 audio = get_audio_sync(summary, voice_map[sel_voice_label], v_speed)
                 st.session_state.audio_bytes = audio
@@ -236,5 +247,15 @@ if st.session_state.current_summary:
         st.caption("🎧 **Listen to the Deep Dive**")
         if st.session_state.audio_bytes:
             st.audio(st.session_state.audio_bytes, format='audio/mp3')
+            
+            # Download Button
+            safe_title = "".join([c for c in st.session_state.current_title if c.isalpha() or c.isdigit() or c==' ']).rstrip()
+            st.download_button(
+                label="💾 Download Audio File",
+                data=st.session_state.audio_bytes,
+                file_name=f"{safe_title}.mp3",
+                mime="audio/mp3",
+                use_container_width=True
+            )
         else:
-            st.warning("⚠️ Audio could not be generated for this summary. Check for red error boxes above.")
+            st.warning("⚠️ Audio could not be generated. Check for red error boxes above.")
