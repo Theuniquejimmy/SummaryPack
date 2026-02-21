@@ -63,7 +63,7 @@ def get_raw_lore(wiki_slug, ep_title):
         for edit_btn in soup.find_all('span', class_='mw-editsection'): edit_btn.decompose()
         
         story_keywords = ['plot', 'synopsis', 'summary', 'episode_summary']
-        best_content = [] # Store the longest section here
+        best_content = []
         
         for header in soup.find_all(['h2', 'h3']):
             h_text, h_id = header.get_text().lower(), header.get('id', '').lower()
@@ -73,7 +73,6 @@ def get_raw_lore(wiki_slug, ep_title):
             if any(key in h_text or key in h_id or key in span_id for key in story_keywords):
                 content = []
                 for sibling in header.find_next_siblings():
-                    # Stop if we hit a completely new major section on the page
                     if sibling.name == 'h2': 
                         break
                         
@@ -87,7 +86,7 @@ def get_raw_lore(wiki_slug, ep_title):
                         txt = sibling.get_text().strip()
                         if txt: content.append(f"<p>{txt}</p>")
                 
-                # Compare section lengths: If "Plot" is longer than "Synopsis", overwrite it
+                # Compare section lengths
                 if len("".join(content)) > len("".join(best_content)):
                     best_content = content
         
@@ -115,15 +114,12 @@ def build_season_epub(show_id, show_name, season_num, wiki_slug):
     for i, ep in enumerate(season_episodes):
         status_text.text(f"Scraping Episode {ep['number']}: {ep['name']}...")
         
-        # 1. Gather Both Sources
         raw_text, _ = get_raw_lore(wiki_slug, ep['name'])
         tvmaze_summary = ep.get('summary', '')
         
-        # 2. Get Clean Character Counts for accurate weighing
         fandom_len = len(BeautifulSoup(raw_text, "html.parser").get_text()) if raw_text else 0
         tvmaze_len = len(BeautifulSoup(tvmaze_summary, "html.parser").get_text()) if tvmaze_summary else 0
         
-        # 3. Quality Control Weigh-In
         final_text = ""
         if raw_text and fandom_len >= tvmaze_len:
             final_text = raw_text
@@ -184,7 +180,7 @@ st.title("📖 TV Vault Reader")
 query = st.text_input("Search for a show:", placeholder="e.g. Invincible")
 
 if query:
-    try:
+    try: # <--- THIS IS THE TRY STATEMENT THAT MUST BE CLOSED AT THE BOTTOM
         resp = requests.get(f"https://api.tvmaze.com/search/shows?q={query}").json()
         if resp:
             show_options = {f"{i['show']['name']} ({i['show'].get('premiered','?').split('-')[0]})": i['show'] for i in resp}
@@ -202,3 +198,117 @@ if query:
                 if compiled_file:
                     st.session_state.epub_ready = compiled_file
                     st.success("Season Compiled Successfully!")
+                else:
+                    st.error("Could not compile season. No lore found.")
+            
+            if st.session_state.epub_ready and os.path.exists(st.session_state.epub_ready):
+                with open(st.session_state.epub_ready, "rb") as file:
+                    st.download_button(label="⬇️ Download Your EPUB Book", data=file, file_name=st.session_state.epub_ready, mime="application/epub+zip", use_container_width=True)
+
+            st.divider()
+
+            # --- READER EXTRACTION WITH BACKUP ---
+            if st.button("🔓 Read Single Episode", use_container_width=True) or st.session_state.auto_fetch:
+                st.session_state.auto_fetch = False
+                
+                api_url = f"https://api.tvmaze.com/shows/{show_data['id']}/episodebynumber?season={st.session_state.s_val}&number={st.session_state.ep_val}"
+                api_res = requests.get(api_url)
+                
+                if api_res.status_code == 200:
+                    api_data = api_res.json()
+                    if "name" in api_data:
+                        
+                        raw_text, found_url = get_raw_lore(wiki_slug, api_data['name'])
+                        tvmaze_summary = api_data.get('summary', '')
+                        
+                        fandom_len = len(BeautifulSoup(raw_text, "html.parser").get_text()) if raw_text else 0
+                        tvmaze_len = len(BeautifulSoup(tvmaze_summary, "html.parser").get_text()) if tvmaze_summary else 0
+                        
+                        if raw_text and fandom_len >= tvmaze_len:
+                            st.session_state.lore_text = raw_text
+                            st.session_state.wiki_url = found_url
+                        elif tvmaze_summary:
+                            st.session_state.lore_text = tvmaze_summary
+                            st.session_state.wiki_url = api_data.get('url', 'https://www.tvmaze.com')
+                            st.toast("Fandom stub detected. Loaded higher-quality TVMaze summary!", icon="⚖️")
+                        else:
+                            st.session_state.lore_text = None
+                            st.error(f"No plot summary found on Fandom or TVMaze.")
+                            
+                        if st.session_state.lore_text:
+                            st.session_state.ep_name = api_data['name']
+                            st.session_state.image_url = api_data.get('image', {}).get('original')
+                            st.session_state.b64_audio = None 
+
+                    else: st.error("Episode name not found.")
+                else: 
+                    st.warning("You may have reached the end of the season! Adjust the Season tracker above.")
+
+            # --- THE PRO READER UI ---
+            if st.session_state.lore_text:
+                
+                with st.expander("⚙️ Reader Settings", expanded=False):
+                    rc1, rc2 = st.columns([1, 2])
+                    theme = rc1.selectbox("Theme", ["Dark", "Sepia", "Light"])
+                    voice_setting = rc2.selectbox("Narrator Voice", [
+                        "Christopher (Deep, Cinematic)", "Aria (Clear, Professional)", "Guy (Casual, Conversational)",
+                        "Jenny (Friendly, Upbeat)", "Steffan (Authoritative, Clear)", "Ryan (British, Sophisticated)", "Natasha (Australian, Smooth)"
+                    ])
+                
+                theme_styles = {
+                    "Dark": {"bg": "#121212", "text": "#e0e0e0", "accent": "#3b82f6", "player": "#1e1e1e"},
+                    "Sepia": {"bg": "#f4ecd8", "text": "#433422", "accent": "#8b5a2b", "player": "#e8dfc8"},
+                    "Light": {"bg": "#ffffff", "text": "#333333", "accent": "#2563eb", "player": "#f3f4f6"}
+                }
+                current_theme = theme_styles[theme]
+
+                st.markdown(f"""
+                    <style>
+                    .pro-reader {{ background-color: {current_theme['bg']}; color: {current_theme['text']}; font-family: sans-serif; font-size: 1.15rem; line-height: 1.8; padding: 30px 25px; border-radius: 12px; margin-top: 15px; }}
+                    .pro-reader h3 {{ color: {current_theme['accent']}; margin-top: 1.5em; }}
+                    </style>
+                """, unsafe_allow_html=True)
+
+                st.subheader(f"S{st.session_state.s_val}E{st.session_state.ep_val}: {st.session_state.ep_name}")
+                if st.session_state.image_url: st.image(st.session_state.image_url, use_container_width=True)
+                
+                if st.button("🔊 Generate Audio Narration", use_container_width=True):
+                    with st.spinner(f"Synthesizing {voice_setting.split(' ')[0]}'s voice..."):
+                        clean_tts_text = BeautifulSoup(st.session_state.lore_text, "html.parser").get_text(separator=' ')
+                        create_audio(clean_tts_text, voice_setting)
+                        with open("lore.mp3", "rb") as f:
+                            st.session_state.b64_audio = base64.b64encode(f.read()).decode()
+
+                if st.session_state.b64_audio:
+                    realtime_player_html = f"""
+                    <!DOCTYPE html>
+                    <html>
+                    <head><style>body {{ margin: 0; padding: 0; background-color: transparent; }} .player-box {{ background-color: {current_theme['player']}; padding: 15px; border-radius: 10px; border-left: 4px solid {current_theme['accent']}; font-family: sans-serif; color: {current_theme['text']}; }}</style></head>
+                    <body>
+                        <div class="player-box">
+                            <audio id="narrator-audio" controls autoplay style="width: 100%;"><source src="data:audio/mp3;base64,{st.session_state.b64_audio}" type="audio/mp3"></audio>
+                            <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 12px;">
+                                <label for="speed-slider" style="font-size: 0.95rem; font-weight: 500;">🏃 Playback Speed: <span id="speed-display">1.0x</span></label>
+                                <input type="range" id="speed-slider" min="0.5" max="2.0" step="0.1" value="1.0" style="width: 50%; cursor: pointer;">
+                            </div>
+                        </div>
+                        <script>
+                            const audio = document.getElementById("narrator-audio");
+                            const slider = document.getElementById("speed-slider");
+                            const display = document.getElementById("speed-display");
+                            slider.addEventListener("input", function() {{ audio.playbackRate = this.value; display.textContent = parseFloat(this.value).toFixed(1) + "x"; }});
+                        </script>
+                    </body>
+                    </html>
+                    """
+                    components.html(realtime_player_html, height=120)
+
+                st.markdown(f'<div class="pro-reader">{st.session_state.lore_text}</div>', unsafe_allow_html=True)
+                st.caption(f"Source: [Link]({st.session_state.wiki_url})")
+                
+                st.divider()
+                st.button(f"⏭️ Load Season {st.session_state.s_val}, Episode {st.session_state.ep_val + 1}", on_click=load_next_episode, use_container_width=True)
+
+    # --- THIS IS THE CRITICAL MISSING BLOCK ---
+    except Exception as e:
+        st.error(f"System Error: {e}")
