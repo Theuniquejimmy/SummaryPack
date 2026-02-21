@@ -13,14 +13,38 @@ st.set_page_config(page_title="Comic Vault Analyzer", layout="wide")
 st.markdown("""
     <style>
     .main { background-color: #0e1117; }
-    .stTextInput > div > div > input { color: #00d4ff; }
+    .stTextInput > div > div > input { color: #00d4ff; text-align: center; }
     [data-testid="stSidebar"] { background-color: #1a1c24; }
+    /* Small tweak to make the arrow buttons look seamless */
+    div[data-testid="column"] button { padding-left: 0; padding-right: 0; }
     </style>
     """, unsafe_allow_html=True)
 
-# Initialize Session State for History
+# --- SESSION STATE INITIALIZATION ---
 if "history" not in st.session_state:
     st.session_state.history = []
+if "issue_num" not in st.session_state:
+    st.session_state.issue_num = "1"
+if "auto_analyze" not in st.session_state:
+    st.session_state.auto_analyze = False
+
+# --- CALLBACKS FOR ARROW BUTTONS ---
+def prev_issue():
+    try:
+        current = int(st.session_state.issue_num)
+        if current > 1:
+            st.session_state.issue_num = str(current - 1)
+            st.session_state.auto_analyze = True
+    except ValueError:
+        pass # Ignore if the user typed something weird like "1-A"
+
+def next_issue():
+    try:
+        current = int(st.session_state.issue_num)
+        st.session_state.issue_num = str(current + 1)
+        st.session_state.auto_analyze = True
+    except ValueError:
+        pass
 
 # --- API KEYS ---
 COMIC_VINE_KEY = os.environ.get("COMIC_VINE_KEY")
@@ -38,21 +62,14 @@ groq_client = Groq(api_key=GROQ_KEY) if GROQ_KEY else None
 @st.cache_data
 def fetch_volumes(query):
     search_url = "https://comicvine.gamespot.com/api/search/"
-    params = {
-        "api_key": COMIC_VINE_KEY,
-        "format": "json",
-        "query": query,
-        "resources": "volume",
-        "limit": 50  # Increased to find Batman 2016
-    }
+    params = {"api_key": COMIC_VINE_KEY, "format": "json", "query": query, "resources": "volume", "limit": 50}
     headers = {"User-Agent": "ComicVaultStreamlit/1.0"}
     try:
         response = requests.get(search_url, params=params, headers=headers).json()
         results = response.get('results', [])
         
         def extract_year(res):
-            year_str = str(res.get('start_year', '9999'))
-            match = re.search(r'(\d{4})', year_str)
+            match = re.search(r'(\d{4})', str(res.get('start_year', '9999')))
             return int(match.group(1)) if match else 9999
 
         results.sort(key=extract_year)
@@ -114,13 +131,14 @@ st.title("📚 Comic Vault Analyzer")
 
 with st.sidebar:
     st.header("🕰️ Recent Searches")
-    h_series, h_issue = "", "1"
+    h_series = ""
     if st.session_state.history:
         history_options = ["Select from history..."] + list(reversed(st.session_state.history))
         selected_history = st.selectbox("Jump back to:", options=history_options)
         if selected_history != "Select from history...":
             h_series = selected_history.split(" #")[0]
-            h_issue = selected_history.split(" #")[1]
+            # Update session state with the selected history issue
+            st.session_state.issue_num = selected_history.split(" #")[1]
 
     st.divider()
     st.header("1. Search Series")
@@ -134,20 +152,41 @@ with st.sidebar:
             volume_id = vol_options[selected_vol_name]
             
             st.header("3. Issue Details")
-            issue_num = st.text_input("Issue Number", value=h_issue if h_issue else "1")
-            analyze_clicked = st.button("Analyze Issue", use_container_width=True)
+            
+            # --- NEW: Arrow Button Navigation UI ---
+            col_prev, col_input, col_next = st.columns([1, 2, 1])
+            with col_prev:
+                # Use a markdown spacing trick to align buttons with the text input
+                st.markdown("<br>", unsafe_allow_html=True)
+                st.button("◄", on_click=prev_issue, use_container_width=True)
+                
+            with col_input:
+                st.text_input("Issue", key="issue_num") # Bound to st.session_state.issue_num
+                
+            with col_next:
+                st.markdown("<br>", unsafe_allow_html=True)
+                st.button("►", on_click=next_issue, use_container_width=True)
+
+            analyze_btn_clicked = st.button("Analyze Issue", use_container_width=True)
+            
+            # Combine manual click and automatic arrow trigger
+            analyze_triggered = analyze_btn_clicked or st.session_state.auto_analyze
+            
         else:
             st.warning("No volumes found.")
 
 # --- DISPLAY AREA ---
 if series_query and 'volume_id' in locals():
-    if analyze_clicked:
-        with st.spinner("Consulting the archives for a Deep Dive..."):
-            issue_data = get_issue_data(volume_id, issue_num)
+    if analyze_triggered:
+        # Reset the auto-trigger so it doesn't loop
+        st.session_state.auto_analyze = False 
+        
+        with st.spinner(f"Consulting the archives for Issue #{st.session_state.issue_num}..."):
+            issue_data = get_issue_data(volume_id, st.session_state.issue_num)
             
             if issue_data:
-                # Add to history logic
-                history_item = f"{selected_vol_name} #{issue_num}"
+                # Add to history
+                history_item = f"{selected_vol_name} #{st.session_state.issue_num}"
                 if history_item not in st.session_state.history:
                     st.session_state.history.append(history_item)
                 
@@ -158,7 +197,7 @@ if series_query and 'volume_id' in locals():
                 with col2:
                     st.subheader(history_item)
                     with st.container(border=True):
-                        summary = generate_ai_summary(issue_data, selected_vol_name, issue_num)
+                        summary = generate_ai_summary(issue_data, selected_vol_name, st.session_state.issue_num)
                         st.markdown(summary)
             else:
-                st.error(f"Issue #{issue_num} not found.")
+                st.error(f"Issue #{st.session_state.issue_num} not found in this volume.")
