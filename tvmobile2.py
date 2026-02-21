@@ -46,16 +46,17 @@ if query:
                 # Format it to look like the search result list
                 resp = [{'show': single_resp}]
 
-        if resp:
-            # Your existing selection logic...
-            show_options = {}
-            for i in resp:
-                s_data = i['show']
-                p_date = s_data.get('premiered')
-                year = p_date.split('-')[0] if p_date else "????"
-                show_options[f"{s_data['name']} ({year})"] = s_data['id']
-            
-            selected_show = st.selectbox("Select Show", options=list(show_options.keys())
+       if resp:
+    show_options = {}
+    for i in resp:
+        s_data = i['show']
+        p_date = s_data.get('premiered')
+        
+        # Check if p_date exists; if not, use "????" 
+        # This prevents the 'NoneType' has no attribute 'split' error
+        year = p_date.split('-')[0] if p_date else "????"
+        
+        show_options[f"{s_data['name']} ({year})"] = s_data['id']
             
             # --- INPUTS: Defining s_val and ep_val clearly ---
             if app_mode == "Single Episode":
@@ -182,5 +183,6 @@ if query:
         st.error(f"App Error: {e}")
 else:
     st.info("Enter a show title to begin.")
+
 
 
