@@ -170,10 +170,18 @@ with st.sidebar:
 if query:
     resp = requests.get(f"https://api.tvmaze.com/search/shows?q={query}").json()
     if resp:
-        show_options = {f"{s['show']['name']} ({s['show'].get('premiered','?')[:4]})": s['show'] for s in resp if 'show' in s}
-        label = st.selectbox("Select Result", options=list(show_options.keys()))
-        show_data = show_options[label]
-        wiki_slug = WIKI_ALIASES.get(show_data['name'], show_data['name'].replace(" ", "").lower())
+        show_options = {}
+        for item in resp:
+            s = item.get('show', {})
+            if not s: continue
+            
+            # --- THE SAFETY CHECK ---
+            p_date = s.get('premiered')
+            # Only slice if p_date is a string; otherwise use "????"
+            year = str(p_date)[:4] if p_date else "????"
+            
+            label = f"{s.get('name')} ({year})"
+            show_options[label] = s
         
         c1, c2 = st.columns(2)
         s_val = c1.number_input("Season", min_value=1, value=1)
