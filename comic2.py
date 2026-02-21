@@ -4,7 +4,7 @@ import os
 import re
 import io
 import asyncio
-import edge_tts  # New requirement: pip install edge-tts
+import edge_tts
 from google import genai
 from groq import Groq
 
@@ -16,6 +16,7 @@ st.markdown("""
     .main { background-color: #0e1117; }
     .stTextInput > div > div > input { color: #00d4ff; text-align: center; font-size: 20px; }
     [data-testid="stSidebar"] { background-color: #1a1c24; }
+    div[data-testid="column"] button { padding-top: 10px; padding-bottom: 10px; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -28,6 +29,10 @@ if "auto_analyze" not in st.session_state:
     st.session_state.auto_analyze = False
 if "current_summary" not in st.session_state:
     st.session_state.current_summary = None
+if "current_img" not in st.session_state:
+    st.session_state.current_img = None
+if "current_title" not in st.session_state:
+    st.session_state.current_title = None
 
 # --- CALLBACKS ---
 def prev_issue():
@@ -45,10 +50,17 @@ def next_issue():
         st.session_state.auto_analyze = True
     except: pass
 
+def clear_history():
+    st.session_state.history = []
+
 # --- API KEYS ---
 COMIC_VINE_KEY = os.environ.get("COMIC_VINE_KEY")
 GEMINI_KEY = os.environ.get("GEMINI_KEY")
 GROQ_KEY = os.environ.get("GROQ_KEY")
+
+if not COMIC_VINE_KEY or not GEMINI_KEY:
+    st.error("Missing API Keys! Please check your environment variables.")
+    st.stop()
 
 ai_client = genai.Client(api_key=GEMINI_KEY)
 groq_client = Groq(api_key=GROQ_KEY) if GROQ_KEY else None
@@ -83,27 +95,46 @@ def generate_ai_summary(issue_data, series_name, issue_num):
         return resp.text
     except:
         if groq_client:
+            st.caption("ℹ️ *Using Groq Backup*")
             comp = groq_client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}])
             return comp.choices[0].message.content
         return "AI Error"
 
-# --- EDGE TTS ASYNC FUNCTION ---
+# --- IMPROVED EDGE TTS FUNCTION ---
 async def generate_edge_audio(text, voice, speed):
-    # speed format: "+0%", "+20%", "-10%"
-    speed_str = f"{'+' if speed >= 1 else ''}{int((speed-1)*100)}%"
-    communicate = edge_tts.Communicate(text, voice, rate=speed_str)
-    audio_data = b""
-    async for chunk in communicate.stream():
-        if chunk["type"] == "audio":
-            audio_data += chunk["data"]
-    return audio_data
+    if not text or len(text.strip()) == 0:
+        return None
+        
+    pct = int((speed - 1) * 100)
+    speed_str = f"{'+' if pct >= 0 else ''}{pct}%"
+    
+    try:
+        communicate = edge_tts.Communicate(text, voice, rate=speed_str)
+        audio_data = b""
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                audio_data += chunk["data"]
+        
+        return audio_data if audio_data else None
+    except Exception as e:
+        print(f"TTS Error: {e}")
+        return None
 
-# --- MAIN UI ---
+# --- UI ---
 st.title("📚 Comic Vault Analyzer")
 
 with st.sidebar:
+    st.header("🕰️ History")
+    h_series = ""
+    if st.session_state.history:
+        sel_h = st.selectbox("Recent:", ["Select..."] + list(reversed(st.session_state.history)))
+        if sel_h != "Select...":
+            h_series = sel_h.split(" #")[0]
+            st.session_state.issue_num = sel_h.split(" #")[1]
+        st.button("🗑️ Clear", on_click=clear_history, use_container_width=True)
+    
+    st.divider()
     st.header("Voice Settings")
-    # Popular high-quality Edge voices
     voice_map = {
         "Guy (Male/Authoritative)": "en-US-GuyNeural",
         "Ava (Female/Clear)": "en-US-AvaNeural",
@@ -115,7 +146,7 @@ with st.sidebar:
     
     st.divider()
     st.header("Search")
-    query = st.text_input("Series")
+    query = st.text_input("Series", value=h_series)
     if query:
         vols = fetch_volumes(query)
         if vols:
@@ -137,13 +168,21 @@ if query and 'vid' in locals() and trigger:
     with st.spinner("Analyzing & Generating Audio..."):
         data = get_issue_data(vid, st.session_state.issue_num)
         if data:
-            st.session_state.current_summary = generate_ai_summary(data, sel_vol, st.session_state.issue_num)
+            summary = generate_ai_summary(data, sel_vol, st.session_state.issue_num)
+            st.session_state.current_summary = summary
             st.session_state.current_img = data.get('image', {}).get('medium_url')
             st.session_state.current_title = f"{sel_vol} #{st.session_state.issue_num}"
             
-            # Generate Edge-TTS Audio
-            clean_text = st.session_state.current_summary.replace("**", "").replace("- ", "")
-            st.session_state.audio_bytes = asyncio.run(generate_edge_audio(clean_text, voice_map[sel_voice_label], v_speed))
+            if st.session_state.current_title not in st.session_state.history:
+                st.session_state.history.append(st.session_state.current_title)
+            
+            # Generate Audio
+            clean_text = re.sub(r'\*+', '', summary).strip()
+            if clean_text:
+                audio = asyncio.run(generate_edge_audio(clean_text, voice_map[sel_voice_label], v_speed))
+                st.session_state.audio_bytes = audio
+        else:
+            st.error("Issue not found.")
 
 if st.session_state.current_summary:
     col_a, col_b = st.columns([1, 2])
@@ -154,5 +193,5 @@ if st.session_state.current_summary:
         with st.container(border=True): st.markdown(st.session_state.current_summary)
         
         # Audio Player
-        if "audio_bytes" in st.session_state:
+        if "audio_bytes" in st.session_state and st.session_state.audio_bytes:
             st.audio(st.session_state.audio_bytes, format='audio/mp3')
