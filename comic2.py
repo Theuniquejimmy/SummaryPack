@@ -120,28 +120,32 @@ def generate_ai_summary(issue_data, series_name, issue_num):
             return comp.choices[0].message.content
         return "AI Error"
 
-# --- BULLETPROOF EDGE TTS FUNCTION (SUBPROCESS) ---
+# --- BULLETPROOF EDGE TTS FUNCTION (FILE METHOD) ---
 def get_audio_sync(text, voice, speed):
     if not text or len(text.strip()) == 0:
         return None
         
-    # Keep only safe characters and limit length
+    # Clean up weird characters
     clean = re.sub(r'[^a-zA-Z0-9\s.,!?\'"-]', '', text).strip()[:4000]
     
     try:
-        # Create a temporary file to hold the MP3
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as fp:
-            temp_path = fp.name
+        # 1. Create a temp file for the TEXT
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".txt", mode="w", encoding="utf-8") as txt_fp:
+            txt_fp.write(clean)
+            txt_path = txt_fp.name
+
+        # 2. Create a temp file for the AUDIO
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as mp3_fp:
+            mp3_path = mp3_fp.name
             
-        # Build the command-line instruction
+        # 3. Build the command-line instruction USING THE FILE (-f)
         cmd = [
             "edge-tts",
             "--voice", voice,
-            "--text", clean,
-            "--write-media", temp_path
+            "-f", txt_path,          # Tell it to read from the text file
+            "--write-media", mp3_path
         ]
         
-        # Only add the speed modifier if it's not exactly 1.0
         if speed != 1.0:
             pct = int(round((speed - 1) * 100))
             speed_str = f"{'+' if pct >= 0 else ''}{pct}%"
@@ -150,18 +154,18 @@ def get_audio_sync(text, voice, speed):
         # Run the command silently
         subprocess.run(cmd, check=True, capture_output=True)
         
-        # Read the audio bytes back into Streamlit
-        with open(temp_path, "rb") as f:
+        # Read the audio bytes
+        with open(mp3_path, "rb") as f:
             audio_data = f.read()
             
-        # Clean up the temporary file
-        os.remove(temp_path)
+        # Clean up both temporary files
+        os.remove(txt_path)
+        os.remove(mp3_path)
         
         return audio_data if audio_data else None
         
     except subprocess.CalledProcessError as e:
-        # If the command line tool fails, this grabs the exact error message
-        st.error(f"Edge-TTS CLI Error: {e.stderr.decode()}")
+        st.error(f"Edge-TTS Server Error: {e.stderr.decode()}")
         return None
     except Exception as e:
         st.error(f"System Error: {e}")
@@ -259,3 +263,4 @@ if st.session_state.current_summary:
             )
         else:
             st.warning("⚠️ Audio could not be generated. Check for red error boxes above.")
+
