@@ -151,6 +151,10 @@ def get_plot_from_search(series_name, issue_num, creators):
             response = tavily_client.search(query=search_query, search_depth="advanced", max_results=3)
             if response and 'results' in response:
                 web_plot = " ".join([res['content'] for res in response['results']])
+                
+                # THE TOKEN FIX: Truncate the web output so we don't hit the 429 TPM limit
+                web_plot = web_plot[:6000]
+                
                 return f"WIKI SEARCH RESULTS: {web_plot}"
             return "Search completed but no plot data found."
         except Exception as e:
