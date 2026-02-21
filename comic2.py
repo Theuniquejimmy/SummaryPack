@@ -5,7 +5,7 @@ import re
 import asyncio
 import edge_tts
 from google import genai
-from openai import OpenAI  # Swapped Groq for OpenAI
+from openai import OpenAI
 
 # --- CONFIGURATION & STYLING ---
 st.set_page_config(page_title="Comic Vault Analyzer", layout="wide")
@@ -42,14 +42,14 @@ def prev_issue():
         if curr > 1:
             st.session_state.issue_num = str(curr - 1)
             st.session_state.auto_analyze = True
-    except: pass
+    except ValueError: pass
 
 def next_issue():
     try:
         curr = int(st.session_state.issue_num)
         st.session_state.issue_num = str(curr + 1)
         st.session_state.auto_analyze = True
-    except: pass
+    except ValueError: pass
 
 def clear_history():
     st.session_state.history = []
@@ -57,15 +57,13 @@ def clear_history():
 # --- API KEYS ---
 COMIC_VINE_KEY = os.environ.get("COMIC_VINE_KEY")
 GEMINI_KEY = os.environ.get("GEMINI_KEY")
-NVIDIA_API_KEY = os.environ.get("NVIDIA_API_KEY") # New NVIDIA Key
+NVIDIA_API_KEY = os.environ.get("NVIDIA_API_KEY")
 
 if not COMIC_VINE_KEY or not GEMINI_KEY:
     st.error("Missing API Keys! Please check your environment variables.")
     st.stop()
 
 ai_client = genai.Client(api_key=GEMINI_KEY)
-
-# Initialize the NVIDIA client using the OpenAI library
 nvidia_client = OpenAI(
   base_url="https://integrate.api.nvidia.com/v1",
   api_key=NVIDIA_API_KEY
@@ -81,7 +79,7 @@ def fetch_volumes(query):
         results = res.get('results', [])
         results.sort(key=lambda x: int(re.search(r'\d+', str(x.get('start_year', 9999))).group()) if re.search(r'\d+', str(x.get('start_year', 9999))) else 9999)
         return results
-    except: return []
+    except Exception: return []
 
 @st.cache_data
 def get_issue_data(volume_id, issue_num):
@@ -90,7 +88,7 @@ def get_issue_data(volume_id, issue_num):
     try:
         res = requests.get(url, params=params, headers={"User-Agent": "ComicVault/1.0"}).json()
         return res.get('results', [])[0] if res.get('results') else None
-    except: return None
+    except Exception: return None
 
 def generate_ai_summary(issue_data, series_name, issue_num):
     chars = ", ".join([c['name'] for c in (issue_data.get('character_credits') or [])])
@@ -110,11 +108,9 @@ def generate_ai_summary(issue_data, series_name, issue_num):
     """
     
     try:
-        # Try Gemini First
         resp = ai_client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
         return resp.text
-    except Exception as e:
-        # Fallback to NVIDIA
+    except Exception:
         if nvidia_client:
             st.caption("ℹ️ *Using NVIDIA Backup*")
             comp = nvidia_client.chat.completions.create(
@@ -124,16 +120,20 @@ def generate_ai_summary(issue_data, series_name, issue_num):
             return comp.choices[0].message.content
         return "AI Error"
 
-# --- EDGE TTS FUNCTION ---
-async def generate_edge_audio(text, voice, speed):
+# --- IMPROVED EDGE TTS FUNCTION ---
+async def _async_generate_edge_audio(text, voice, speed):
     if not text or len(text.strip()) == 0:
         return None
         
-    pct = int((speed - 1) * 100)
+    # AGGRESSIVE CLEANUP: Keep only letters, numbers, and basic punctuation
+    clean = re.sub(r'[^a-zA-Z0-9\s.,!?\'"-]', '', text)
+    clean = clean.strip()[:4000] # Limit size to prevent server timeout
+    
+    pct = int(round((speed - 1) * 100))
     speed_str = f"{'+' if pct >= 0 else ''}{pct}%"
     
     try:
-        communicate = edge_tts.Communicate(text, voice, rate=speed_str)
+        communicate = edge_tts.Communicate(clean, voice, rate=speed_str)
         audio_data = b""
         async for chunk in communicate.stream():
             if chunk["type"] == "audio":
@@ -141,7 +141,19 @@ async def generate_edge_audio(text, voice, speed):
         
         return audio_data if audio_data else None
     except Exception as e:
-        print(f"TTS Error: {e}")
+        st.error(f"Edge-TTS Server Error: {e}")
+        return None
+
+def get_audio_sync(text, voice, speed):
+    """Safe wrapper to run async code inside Streamlit threads."""
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        audio = loop.run_until_complete(_async_generate_edge_audio(text, voice, speed))
+        loop.close()
+        return audio
+    except Exception as e:
+        st.error(f"Streamlit Async Error: {e}")
         return None
 
 # --- UI ---
@@ -200,10 +212,9 @@ if query and 'vid' in locals() and trigger:
             if st.session_state.current_title not in st.session_state.history:
                 st.session_state.history.append(st.session_state.current_title)
             
-            # Generate Audio
-            clean_text = re.sub(r'\*+', '', summary).strip()
-            if clean_text:
-                audio = asyncio.run(generate_edge_audio(clean_text, voice_map[sel_voice_label], v_speed))
+            # Generate Audio using Safe Sync Wrapper
+            if summary:
+                audio = get_audio_sync(summary, voice_map[sel_voice_label], v_speed)
                 st.session_state.audio_bytes = audio
             else:
                 st.session_state.audio_bytes = None
@@ -226,4 +237,4 @@ if st.session_state.current_summary:
         if st.session_state.audio_bytes:
             st.audio(st.session_state.audio_bytes, format='audio/mp3')
         else:
-            st.warning("⚠️ Audio could not be generated for this summary.")
+            st.warning("⚠️ Audio could not be generated for this summary. Check for red error boxes above.")
