@@ -16,7 +16,7 @@ WIKI_ALIASES = {
     "Invincible": "amazon-invincible",
     "The Incredible Hulk": "marvelcinematicuniverse",
     "X-Men '97": "xmen97",
-    "The Wheel of Time": "wheeloftime",  # <-- FIXED HERE
+    "The Wheel of Time": "wheeloftime",
     "Gilmore Girls": "gilmoregirls",
     "ER": "er"
 }
@@ -45,17 +45,25 @@ def create_audio(text, voice_choice):
 def get_raw_lore(wiki_slug, ep_title):
     api_url = f"https://{wiki_slug.lower()}.fandom.com/api.php"
     search_params = {"action": "query", "list": "search", "srsearch": ep_title, "format": "json"}
+    # THE FIX: Disguise the scraper as a real Chrome browser to bypass Fandom security
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
     
     try:
-        search_res = requests.get(api_url, params=search_params, timeout=10).json()
+        search_res = requests.get(api_url, params=search_params, headers=headers, timeout=10).json()
         search_results = search_res.get("query", {}).get("search", [])
         if not search_results: return None, None
             
+        # THE FIX: Force an exact match to avoid grabbing "Episode_Name/Transcript" pages
         exact_title = search_results[0]["title"]
+        for res in search_results:
+            if res["title"].lower() == ep_title.lower() or res["title"].lower() == f"{ep_title.lower()} (episode)":
+                exact_title = res["title"]
+                break
+
         page_url = f"https://{wiki_slug.lower()}.fandom.com/wiki/{urllib.parse.quote(exact_title.replace(' ', '_'))}"
         
         parse_params = {"action": "parse", "page": exact_title, "prop": "text", "format": "json", "redirects": "1"}
-        parse_res = requests.get(api_url, params=parse_params, timeout=10).json()
+        parse_res = requests.get(api_url, params=parse_params, headers=headers, timeout=10).json()
         html_text = parse_res.get("parse", {}).get("text", {}).get("*", "")
         
         if not html_text: return None, None
@@ -76,10 +84,12 @@ def get_raw_lore(wiki_slug, ep_title):
                 for sibling in header.find_next_siblings():
                     if sibling.name in ['h2', 'h3', 'h4']:
                         h_text_sib = sibling.get_text().strip()
+                        # THE FIX: Expanded stop words for dense fantasy wikis
                         stop_words = [
                             'cast', 'trivia', 'gallery', 'references', 'production', 
                             'credits', 'quotes', 'videos', 'music', 'notes', 
-                            'continuity', 'external links', 'see also', 'reception', 'external'
+                            'continuity', 'external links', 'see also', 'reception', 
+                            'external', 'locations', 'appearances'
                         ]
                         if any(stop in h_text_sib.lower() for stop in stop_words): 
                             break 
@@ -313,4 +323,3 @@ try:
 
 except Exception as e:
     st.error(f"System Error: {e}")
-
