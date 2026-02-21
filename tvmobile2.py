@@ -31,34 +31,40 @@ st.title("📺 TV Vault Pro")
 # --- MODE SELECTION ---
 app_mode = st.radio("Recap Mode:", ["Single Episode", "Full Season"], horizontal=True)
 
-# Change your search block to this:
+# --- SEARCH ---
+query = st.text_input("Search for a show", placeholder="e.g. Buffy the Vampire Slayer")
+
 if query:
     try:
-        # Use a more flexible search URL
-        # We'll try the standard search first
-        search_url = f"https://api.tvmaze.com/search/shows?q={query}"
-        resp = requests.get(search_url).json()
+        # 1. Show Search
+        resp = requests.get(f"https://api.tvmaze.com/search/shows?q={query}").json()
         
-        # If no results, try 'singlesearch' which is more aggressive
-        if not resp:
-            single_resp = requests.get(f"https://api.tvmaze.com/singlesearch/shows?q={query}").json()
-            if single_resp:
-                # Format it to look like the search result list
-                resp = [{'show': single_resp}]
-
-       if resp:
-    show_options = {}
-    for i in resp:
-        s_data = i['show']
-        p_date = s_data.get('premiered')
-        
-        # Check if p_date exists; if not, use "????" 
-        # This prevents the 'NoneType' has no attribute 'split' error
-        year = p_date.split('-')[0] if p_date else "????"
-        
-        show_options[f"{s_data['name']} ({year})"] = s_data['id']
+        if resp:
+            show_options = {}
+            for i in resp:
+                s_data = i.get('show', {})
+                if not s_data:
+                    continue
+                
+                # --- THE FIX: Bulletproof date handling ---
+                p_date = s_data.get('premiered')
+                # Explicitly check if it's a string before splitting
+                if isinstance(p_date, str) and '-' in p_date:
+                    year = p_date.split('-')[0]
+                else:
+                    year = "????"
+                
+                name = s_data.get('name', 'Unknown Title')
+                show_options[f"{name} ({year})"] = s_data.get('id')
             
-            # --- INPUTS: Defining s_val and ep_val clearly ---
+            if not show_options:
+                st.warning("Found data, but no valid show titles. Try tweaking your search.")
+                st.stop()
+                
+            selected_show = st.selectbox("Select Show", options=list(show_options.keys()))
+            show_id = show_options[selected_show]
+            
+            # --- INPUTS ---
             if app_mode == "Single Episode":
                 col1, col2 = st.columns(2)
                 with col1:
@@ -75,42 +81,44 @@ if query:
                     
                     if app_mode == "Single Episode":
                         # --- EPISODE LOGIC ---
-                        # Corrected URL using s_val and ep_val
                         url = f"https://api.tvmaze.com/shows/{show_id}/episodebynumber?season={s_val}&number={ep_val}&embed=guestcast"
                         data = requests.get(url).json()
                         
                         if "name" in data:
-                            if data.get('image'): 
+                            if data.get('image') and data['image'].get('medium'): 
                                 st.image(data['image']['medium'], use_container_width=True)
                             
-                            clean_summary = re.sub('<[^<]+>', '', data.get('summary', ''))
+                            # --- SAFETY FIX: Handle 'None' summaries ---
+                            raw_summary = data.get('summary') or "No summary available."
+                            clean_summary = re.sub('<[^<]+>', '', raw_summary)
+                            
                             guest_list = data.get('_embedded', {}).get('guestcast', [])
                             guests = ", ".join([f"{g['character']['name']} ({g['person']['name']})" for g in guest_list]) or "No major guests."
 
-                            # THE PROMPT (Using s_val and ep_val exclusively)
+                            # THE PROMPT 
                             prompt = f"""
                             Recap Season {s_val}, Episode {ep_val} of {selected_show} as if you are a tv specialist.
                             Title: {data['name']}
                             Guests: {guests}
                             Summary: {clean_summary}
 
-                             CRITICAL RULES:
-        1. NO SPOILERS for future episodes, but can spoil current episode.
-        2. Write in a conversational, informative tone.
-        3. Break the text into short, digestible paragraphs. 
-        4. Use standard dashes (-) for bullet points. 
-        5. Do NOT use Markdown formatting (like ** or #) since this will be displayed in a plain text window.
-        6. Write a high-detail, conversational recap.
-        7. Use the lore notes to mention subplots or specific character beats.
-        
-        Structure your response naturally, with this flow:
-        - A informative opening acknowledging the episode title and where we are in the season.
-        - A setup of where the main characters are at the start of the episode.
-        - The main plot points or conflict (use a detailed bulleted list with dashes). CRITICAL: Use your own internal knowledge to fill in any major subplots, romantic developments, or notable guest characters that are missing from the raw data.        - How the episode ends. where do the characters end up?
-        - List all main plot points of episode so if I havent seen it it'll fill me in.
-        - A quick piece of trivia about the episode, guest stars
-        - How it ties into the larger season arc.
-        
+                            CRITICAL RULES:
+                            1. NO SPOILERS for future episodes, but can spoil current episode.
+                            2. Write in a conversational, informative tone.
+                            3. Break the text into short, digestible paragraphs. 
+                            4. Use standard dashes (-) for bullet points. 
+                            5. Do NOT use Markdown formatting (like ** or #) since this will be displayed in a plain text window.
+                            6. Write a high-detail, conversational recap.
+                            7. Use the lore notes to mention subplots or specific character beats.
+                            
+                            Structure your response naturally, with this flow:
+                            - A informative opening acknowledging the episode title and where we are in the season.
+                            - A setup of where the main characters are at the start of the episode.
+                            - The main plot points or conflict (use a detailed bulleted list with dashes). CRITICAL: Use your own internal knowledge to fill in any major subplots, romantic developments, or notable guest characters that are missing from the raw data.
+                            - How the episode ends. where do the characters end up?
+                            - List all main plot points of episode so if I havent seen it it'll fill me in.
+                            - A quick piece of trivia about the episode, guest stars
+                            - How it ties into the larger season arc.
                             """
                         else:
                             st.error(f"Episode S{s_val}E{ep_val} not found.")
@@ -118,37 +126,25 @@ if query:
                     
                     else:
                         # --- SEASON LOGIC ---
-                        # 1. Get Season ID
                         seasons = requests.get(f"https://api.tvmaze.com/shows/{show_id}/seasons").json()
-                        target = next((s for s in seasons if s['number'] == s_val), None)
+                        target = next((s for s in seasons if s.get('number') == s_val), None)
                         
                         if target:
-                            if target.get('image'): 
+                            if target.get('image') and target['image'].get('medium'): 
                                 st.image(target['image']['medium'], use_container_width=True)
                             
-                            # 2. Get all episode summaries
                             ep_list = requests.get(f"https://api.tvmaze.com/seasons/{target['id']}/episodes").json()
-                            full_text = " ".join([re.sub('<[^<]+>', '', e.get('summary', '')) for e in ep_list])
                             
-                            # THE PROMPT (Using s_val)
+                            # --- SAFETY FIX: Handle 'None' summaries in the loop ---
+                            full_text = " ".join([re.sub('<[^<]+>', '', e.get('summary') or "") for e in ep_list])
+                            
+                            # THE PROMPT
                             prompt = f"""
                             Act as an authentic, adaptive AI collaborator with a touch of wit. Provide a thorough, insightful recap of {selected_show} Season {s_val} as if i'v never seen it and need to prepare myself to watch the next season.
                             Episode Context: {full_text[:3500]}
+                            
                             Your response must follow these structural guidelines:
-
                             Tone: Balance empathy with candor. Be a supportive, grounded guide who uses clear, concise prose with a hint of humor.
-
-                            Introduction: Start with a brief, high-energy hook that captures the 'vibe' of the story.
-
-                            The Core Conflict: Use an H2 heading to explain the central plot engine or 'the deal' that sets the story in motion.
-
-                            Character Arcs: Use H2 headings to break down the journeys of the 2-3 main protagonists. Use bullet points for specific sub-plots (romance, career, etc.).
-        
-                            Notable Moments: List 'must-know' plot points for every episodes or chapters using a numbered list.
-
-                            Formatting Toolkit: Use horizontal rules (---) to separate sections, bold key terms to make the text scannable, and avoid dense walls of text.
-    
-                            Thematic Wrap-up: End with a brief H3 section on the overall theme of this specific installment.
 
                             RULES:
                             1. Identify major story arcs and character growth over the year.
@@ -183,6 +179,3 @@ if query:
         st.error(f"App Error: {e}")
 else:
     st.info("Enter a show title to begin.")
-
-
-
