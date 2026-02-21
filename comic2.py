@@ -130,41 +130,45 @@ def get_issue_data(volume_id, issue_num):
         return res.get('results', [])[0] if res.get('results') else None
     except Exception: return None
 
+# --- AGENT 1: THE RESEARCHER ---
+def get_plot_from_search(series_name, issue_num, creators):
+    """A dedicated AI agent that only searches the web for the plot."""
+    st.toast("🔍 Deploying Gemini Search Agent to find missing plot...")
+    try:
+        from google.genai import types
+        # A very simple, strict prompt just for searching
+        research_prompt = f"Search Google and tell me exactly what happens in the plot of the comic book '{series_name} #{issue_num}' by {creators}. Be highly detailed about the events."
+        
+        resp = ai_client.models.generate_content(
+            model="gemini-2.0-flash", 
+            contents=research_prompt,
+            config=types.GenerateContentConfig(
+                tools=[{"google_search": {}}]
+            )
+        )
+        return f"WEB SEARCH RESULTS: {resp.text}"
+    except Exception as e:
+        return "Search failed. Do your best to recall."
+
+# --- AGENT 2: THE HISTORIAN ---
 def generate_ai_summary(issue_data, series_name, issue_num):
     chars = ", ".join([c['name'] for c in (issue_data.get('character_credits') or [])])
     creators = ", ".join([p['name'] for p in (issue_data.get('person_credits') or [])])
     
+    # Grab whatever Comic Vine gave us
     plot = str(issue_data.get('deck') or issue_data.get('description') or "")[:5000]
     
-    # --- THE WIKI-LOCKED DUCKDUCKGO FAILSAFE ---
+    # If Comic Vine is empty, tag in the Researcher Agent!
     if len(plot.strip()) < 50:
-        st.toast("🔍 Comic Vine plot missing! Scraping the Fandom Wiki...")
-        try:
-            from duckduckgo_search import DDGS
-            
-            clean_series = re.sub(r'[^a-zA-Z0-9\s]', '', series_name)
-            search_query = f"site:marvel.fandom.com {clean_series} issue {issue_num} synopsis"
-            
-            # FIX 1: Use 'lite' backend. It bypasses almost all Streamlit IP blocks.
-            ddg_results = DDGS().text(search_query, backend="lite", max_results=3)
-            
-            if ddg_results:
-                web_plot = " ".join([res['body'] for res in ddg_results])
-                plot = f"WIKI SEARCH RESULTS: {web_plot}"
-            else:
-                plot = "" 
-        except Exception as e:
-            st.toast(f"⚠️ Search Blocked: {e}")
-            plot = "" 
+        plot = get_plot_from_search(series_name, issue_num, creators)
     
-    # --- FIX 2: THE ANTI-APOLOGY PROMPT ---
+    # The Historian prompt no longer has to worry about searching!
     prompt = f"""
     You are an expert comic book historian. Write a highly detailed, 500+ word deep-dive summary into {series_name} #{issue_num} by {creators}.
     
-    CRITICAL: If the "Plot Snippet" below is blank, YOU MUST ACTIVELY USE YOUR GOOGLE SEARCH TOOL to find the plot on the Marvel/DC wiki. 
-    DO NOT output any disclaimers. DO NOT say "Unfortunately, without access". DO NOT make an educated guess. If you do not know the plot, search the web for it right now and then write the summary.
+    Use the "Plot Snippet" below as your absolute source of truth for what happens in this issue. 
     
-    Structure:
+    Structure your response using Markdown headings for these exact sections:
     ### 🌍 Context & Background
     ### 📖 Detailed Plot Summary
     ### 💥 Key Moments
@@ -179,14 +183,8 @@ def generate_ai_summary(issue_data, series_name, issue_num):
     """
     
     try:
-        from google.genai import types
-        resp = ai_client.models.generate_content(
-            model="gemini-2.0-flash", 
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                tools=[{"google_search": {}}]
-            )
-        )
+        # Generate the final essay (No search tool needed here!)
+        resp = ai_client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
         return resp.text
     except Exception as e:
         if nvidia_client:
@@ -370,6 +368,7 @@ if st.session_state.current_summary:
             )
         else:
             st.warning("⚠️ Audio could not be generated.")
+
 
 
 
