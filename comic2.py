@@ -134,7 +134,6 @@ def generate_ai_summary(issue_data, series_name, issue_num):
     chars = ", ".join([c['name'] for c in (issue_data.get('character_credits') or [])])
     creators = ", ".join([p['name'] for p in (issue_data.get('person_credits') or [])])
     
-    # Grab whatever Comic Vine gave us
     plot = str(issue_data.get('deck') or issue_data.get('description') or "")[:5000]
     
     # --- THE WIKI-LOCKED DUCKDUCKGO FAILSAFE ---
@@ -143,24 +142,27 @@ def generate_ai_summary(issue_data, series_name, issue_num):
         try:
             from duckduckgo_search import DDGS
             
-            # SANITIZE THE QUERY: Remove # and () so the search engine doesn't break
             clean_series = re.sub(r'[^a-zA-Z0-9\s]', '', series_name)
             search_query = f"site:marvel.fandom.com {clean_series} issue {issue_num} synopsis"
             
-            ddg_results = DDGS().text(search_query, max_results=5)
+            # FIX 1: Use the 'html' backend to bypass basic IP blocks
+            ddg_results = DDGS().text(search_query, backend="html", max_results=3)
+            
             if ddg_results:
                 web_plot = " ".join([res['body'] for res in ddg_results])
                 plot = f"WIKI SEARCH RESULTS (Use this to figure out the plot): {web_plot}"
             else:
-                plot = "No wiki data found. Do your best to recall."
+                plot = "" # FIX 2: Leave blank so the AI doesn't read an error message
         except Exception as e:
-            plot = "Search failed. Do your best to recall the events."
+            # FIX 3: Push the exact error to the screen so you aren't flying blind
+            st.toast(f"⚠️ DuckDuckGo blocked the search: {e}")
+            plot = "" 
     
     prompt = f"""
     Act as a passionate, encyclopedic comic book historian. Your goal is to write a highly detailed, comprehensive deep-dive into {series_name} #{issue_num}. 
     
     CRITICAL INSTRUCTION: Pay close attention to the release year in the series name ({series_name}) and the creative team ({creators}). 
-    Do not confuse this with other volumes or eras of the same title. Use the "Plot Snippet" below as your absolute source of truth for what happens in this issue.
+    If the "Plot Snippet" below is blank, YOU MUST USE YOUR INTERNAL GOOGLE SEARCH TOOL to look up the exact plot of {series_name} #{issue_num}. Do not apologize or say you don't have access—find it!
     
     Structure your response using Markdown headings for these exact sections:
     
@@ -189,7 +191,6 @@ def generate_ai_summary(issue_data, series_name, issue_num):
     """
     
     try:
-        # Try Gemini First
         from google.genai import types
         resp = ai_client.models.generate_content(
             model="gemini-2.0-flash", 
@@ -200,7 +201,6 @@ def generate_ai_summary(issue_data, series_name, issue_num):
         )
         return resp.text
     except Exception as e:
-        # Failsafe to NVIDIA Backup
         if nvidia_client:
             st.caption("ℹ️ *Gemini unavailable. Using NVIDIA Backup...*")
             try:
@@ -212,6 +212,7 @@ def generate_ai_summary(issue_data, series_name, issue_num):
             except Exception as nvidia_err:
                  return f"NVIDIA Error: {nvidia_err}"
         return "AI Error: Both primary and backup APIs failed."
+        
 # --- NEURAL TTS HELPER ---
 async def generate_neural_audio(text, voice, filename="summary_temp.mp3"):
     communicate = edge_tts.Communicate(text, voice)
@@ -381,4 +382,5 @@ if st.session_state.current_summary:
             )
         else:
             st.warning("⚠️ Audio could not be generated.")
+
 
