@@ -145,48 +145,36 @@ def generate_ai_summary(issue_data, series_name, issue_num):
             clean_series = re.sub(r'[^a-zA-Z0-9\s]', '', series_name)
             search_query = f"site:marvel.fandom.com {clean_series} issue {issue_num} synopsis"
             
-            # FIX 1: Use the 'html' backend to bypass basic IP blocks
-            ddg_results = DDGS().text(search_query, backend="html", max_results=3)
+            # FIX 1: Use 'lite' backend. It bypasses almost all Streamlit IP blocks.
+            ddg_results = DDGS().text(search_query, backend="lite", max_results=3)
             
             if ddg_results:
                 web_plot = " ".join([res['body'] for res in ddg_results])
-                plot = f"WIKI SEARCH RESULTS (Use this to figure out the plot): {web_plot}"
+                plot = f"WIKI SEARCH RESULTS: {web_plot}"
             else:
-                plot = "" # FIX 2: Leave blank so the AI doesn't read an error message
+                plot = "" 
         except Exception as e:
-            # FIX 3: Push the exact error to the screen so you aren't flying blind
-            st.toast(f"⚠️ DuckDuckGo blocked the search: {e}")
+            st.toast(f"⚠️ Search Blocked: {e}")
             plot = "" 
     
+    # --- FIX 2: THE ANTI-APOLOGY PROMPT ---
     prompt = f"""
-    Act as a passionate, encyclopedic comic book historian. Your goal is to write a highly detailed, comprehensive deep-dive into {series_name} #{issue_num}. 
+    You are an expert comic book historian. Write a highly detailed, 500+ word deep-dive summary into {series_name} #{issue_num} by {creators}.
     
-    CRITICAL INSTRUCTION: Pay close attention to the release year in the series name ({series_name}) and the creative team ({creators}). 
-    If the "Plot Snippet" below is blank, YOU MUST USE YOUR INTERNAL GOOGLE SEARCH TOOL to look up the exact plot of {series_name} #{issue_num}. Do not apologize or say you don't have access—find it!
+    CRITICAL: If the "Plot Snippet" below is blank, YOU MUST ACTIVELY USE YOUR GOOGLE SEARCH TOOL to find the plot on the Marvel/DC wiki. 
+    DO NOT output any disclaimers. DO NOT say "Unfortunately, without access". DO NOT make an educated guess. If you do not know the plot, search the web for it right now and then write the summary.
     
-    Structure your response using Markdown headings for these exact sections:
-    
+    Structure:
     ### 🌍 Context & Background
-    Explain what was happening in the comic universe leading up to this issue. Who is the creative team, and what run is this?
-    
     ### 📖 Detailed Plot Summary
-    Provide an exhaustive, multi-paragraph recounting of the issue's exact events. 
-    
     ### 💥 Key Moments
-    Use bullet points to list the most iconic panels, character beats, or reveals in this specific issue.
-    
     ### 🏛️ Legacy & Significance
-    Why does this issue matter? Discuss its impact or how it sets up the future.
-    
-    RULES:
-    - Output must be 500-800 words.
-    - Be enthusiastic and authoritative.
     
     RAW DATA:
     Series: {series_name}
     Issue: {issue_num}
     Creators: {creators}
-    Characters Involved: {chars}
+    Characters: {chars}
     Plot Snippet: {plot}
     """
     
@@ -382,5 +370,6 @@ if st.session_state.current_summary:
             )
         else:
             st.warning("⚠️ Audio could not be generated.")
+
 
 
