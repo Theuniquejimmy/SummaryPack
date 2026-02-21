@@ -132,41 +132,39 @@ def get_issue_data(volume_id, issue_num):
 
 # --- AGENT 1: THE RESEARCHER ---
 def get_plot_from_search(series_name, issue_num, creators):
-    """A dedicated AI agent that only searches the web for the plot."""
     st.toast("🔍 Deploying Gemini Search Agent to find missing plot...")
-    try:
-        from google.genai import types
-        
-        # A direct, question-based prompt triggers Google's backend search much better
-        research_prompt = f"What is the exact, detailed plot synopsis of the comic book '{series_name}' issue #{issue_num} written by {creators}?"
-        
-        # THE FIX: This is the exact strict syntax required by the new Google GenAI SDK
-        google_tool = types.Tool(google_search=types.GoogleSearch())
-        
-        resp = ai_client.models.generate_content(
-            model="gemini-2.0-flash", 
-            contents=research_prompt,
-            config=types.GenerateContentConfig(
-                tools=[google_tool]  # <-- Now the internet is actually turned on!
+    
+    from google.genai import types
+    research_prompt = f"What is the exact, detailed plot synopsis of the comic book '{series_name}' issue #{issue_num} written by {creators}?"
+    google_tool = types.Tool(google_search=types.GoogleSearch())
+    
+    # Auto-Retry Loop (Tries 3 times)
+    for attempt in range(3):
+        try:
+            resp = ai_client.models.generate_content(
+                model="gemini-2.0-flash", 
+                contents=research_prompt,
+                config=types.GenerateContentConfig(tools=[google_tool])
             )
-        )
-        return f"WEB SEARCH RESULTS: {resp.text}"
-    except Exception as e:
-        return "Search failed. Do your best to recall."
+            return f"WEB SEARCH RESULTS: {resp.text}"
+        except Exception as e:
+            if "429" in str(e):
+                st.toast(f"⏳ Rate limit hit. Pausing for 5 seconds... (Attempt {attempt+1}/3)")
+                time.sleep(5) # Wait 5 seconds and try again
+            else:
+                return "Search failed due to an unknown API error."
+                
+    return "Search failed. Do your best to recall."
 
 # --- AGENT 2: THE HISTORIAN ---
 def generate_ai_summary(issue_data, series_name, issue_num):
     chars = ", ".join([c['name'] for c in (issue_data.get('character_credits') or [])])
     creators = ", ".join([p['name'] for p in (issue_data.get('person_credits') or [])])
-    
-    # Grab whatever Comic Vine gave us
     plot = str(issue_data.get('deck') or issue_data.get('description') or "")[:5000]
     
-    # If Comic Vine is empty, tag in the Researcher Agent!
     if len(plot.strip()) < 50:
         plot = get_plot_from_search(series_name, issue_num, creators)
     
-    # The Historian prompt no longer has to worry about searching!
     prompt = f"""
     You are an expert comic book historian. Write a highly detailed, 500+ word deep-dive summary into {series_name} #{issue_num} by {creators}.
     
@@ -186,22 +184,31 @@ def generate_ai_summary(issue_data, series_name, issue_num):
     Plot Snippet: {plot}
     """
     
-    try:
-        # Generate the final essay (No search tool needed here!)
-        resp = ai_client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
-        return resp.text
-    except Exception as e:
-        if nvidia_client:
-            st.caption("ℹ️ *Gemini unavailable. Using NVIDIA Backup...*")
-            try:
-                comp = nvidia_client.chat.completions.create(
-                    model="meta/llama-3.1-70b-instruct", 
-                    messages=[{"role": "user", "content": prompt}]
-                )
-                return comp.choices[0].message.content
-            except Exception as nvidia_err:
-                 return f"NVIDIA Error: {nvidia_err}"
-        return "AI Error: Both primary and backup APIs failed."
+    # Auto-Retry Loop for the Historian
+    for attempt in range(3):
+        try:
+            resp = ai_client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
+            return resp.text
+        except Exception as e:
+            if "429" in str(e):
+                st.toast(f"⏳ Rate limit hit writing essay. Pausing for 5 seconds... (Attempt {attempt+1}/3)")
+                time.sleep(5)
+            else:
+                break # If it's not a 429, break the loop and trigger NVIDIA
+                
+    # Fallback to NVIDIA if Gemini completely fails
+    if nvidia_client:
+        st.caption("ℹ️ *Gemini unavailable. Using NVIDIA Backup...*")
+        try:
+            comp = nvidia_client.chat.completions.create(
+                model="meta/llama-3.1-70b-instruct", 
+                messages=[{"role": "user", "content": prompt}]
+            )
+            return comp.choices[0].message.content
+        except Exception as nvidia_err:
+             return f"NVIDIA Error: {nvidia_err}"
+             
+    return "AI Error: Both primary and backup APIs failed."
         
 # --- NEURAL TTS HELPER ---
 async def generate_neural_audio(text, voice, filename="summary_temp.mp3"):
@@ -372,6 +379,7 @@ if st.session_state.current_summary:
             )
         else:
             st.warning("⚠️ Audio could not be generated.")
+
 
 
 
