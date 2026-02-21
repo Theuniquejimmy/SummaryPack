@@ -6,3 +6,6 @@ EbookLib
 openai
 google-genai
 groq
+streamlit
+gTTS
+markdown
