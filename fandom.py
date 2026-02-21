@@ -41,11 +41,10 @@ def create_audio(text, voice_choice):
     asyncio.set_event_loop(loop)
     loop.run_until_complete(generate_neural_audio(text, selected_voice))
 
-# --- THE SMART SECTION SCRAPER ---
+# --- THE SMART LINEAR SCRAPER (Fixes Nested Divs & Book Traps) ---
 def get_raw_lore(wiki_slug, ep_title):
     api_url = f"https://{wiki_slug.lower()}.fandom.com/api.php"
     search_params = {"action": "query", "list": "search", "srsearch": ep_title, "format": "json"}
-    # THE FIX: Disguise the scraper as a real Chrome browser to bypass Fandom security
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
     
     try:
@@ -53,12 +52,26 @@ def get_raw_lore(wiki_slug, ep_title):
         search_results = search_res.get("query", {}).get("search", [])
         if not search_results: return None, None
             
-        # THE FIX: Force an exact match to avoid grabbing "Episode_Name/Transcript" pages
         exact_title = search_results[0]["title"]
+        e_lower = ep_title.lower()
+        
+        # Priority 1: Force TV Episode match (bypasses book chapters)
+        found_tv = False
         for res in search_results:
-            if res["title"].lower() == ep_title.lower() or res["title"].lower() == f"{ep_title.lower()} (episode)":
+            t_lower = res["title"].lower()
+            if t_lower in [f"{e_lower} (tv episode)", f"{e_lower} (episode)", f"{e_lower} (tv series)", f"{e_lower} (tv)"]:
                 exact_title = res["title"]
+                found_tv = True
                 break
+                
+        # Priority 2: Exact Bare Match
+        if not found_tv:
+            for res in search_results:
+                t_lower = res["title"].lower()
+                if t_lower == e_lower:
+                    if "transcript" not in t_lower:
+                        exact_title = res["title"]
+                        break
 
         page_url = f"https://{wiki_slug.lower()}.fandom.com/wiki/{urllib.parse.quote(exact_title.replace(' ', '_'))}"
         
@@ -72,39 +85,73 @@ def get_raw_lore(wiki_slug, ep_title):
         for edit_btn in soup.find_all('span', class_='mw-editsection'): edit_btn.decompose()
         
         story_keywords = ['plot', 'synopsis', 'summary', 'episode_summary']
+        stop_words = [
+            'cast', 'trivia', 'gallery', 'references', 'production', 
+            'credits', 'quotes', 'videos', 'music', 'notes', 
+            'continuity', 'external links', 'see also', 'reception', 
+            'external', 'locations', 'appearances'
+        ]
+        
         best_content = []
+        current_content = []
+        in_story = False
         
-        for header in soup.find_all(['h2', 'h3']):
-            h_text, h_id = header.get_text().lower(), header.get('id', '').lower()
-            inner_span = header.find('span')
-            span_id = inner_span.get('id', '').lower() if inner_span else ""
-            
-            if any(key in h_text or key in h_id or key in span_id for key in story_keywords):
-                content = []
-                for sibling in header.find_next_siblings():
-                    if sibling.name in ['h2', 'h3', 'h4']:
-                        h_text_sib = sibling.get_text().strip()
-                        # THE FIX: Expanded stop words for dense fantasy wikis
-                        stop_words = [
-                            'cast', 'trivia', 'gallery', 'references', 'production', 
-                            'credits', 'quotes', 'videos', 'music', 'notes', 
-                            'continuity', 'external links', 'see also', 'reception', 
-                            'external', 'locations', 'appearances'
-                        ]
-                        if any(stop in h_text_sib.lower() for stop in stop_words): 
-                            break 
-                        if h_text_sib: 
-                            content.append(f"<br><h3>{h_text_sib}</h3>")
-                        
-                    elif sibling.name in ['p', 'ul', 'ol']:
-                        txt = sibling.get_text().strip()
-                        if txt: content.append(f"<p>{txt}</p>")
+        # THE FIX: Linear Document Scanning (Flattens all hidden tags and boxes)
+        for tag in soup.find_all(['h2', 'h3', 'h4', 'p', 'ul', 'ol']):
+            if tag.find_parent('table') or tag.find_parent('aside') or tag.get('id') == 'toc':
+                continue
                 
-                if len("".join(content)) > len("".join(best_content)):
-                    best_content = content
-        
-        if best_content: return "".join(best_content), page_url
-    except Exception: pass
+            if tag.name in ['h2', 'h3']:
+                h_text = tag.get_text().lower()
+                h_id = tag.get('id', '').lower()
+                
+                # Check for Hard Stops (Trivia, Cast, etc.)
+                if any(stop in h_text for stop in stop_words):
+                    if in_story:
+                        if len("".join(current_content)) > len("".join(best_content)):
+                            best_content = current_content
+                        in_story = False
+                        current_content = []
+                    continue
+                
+                # Check for Story Triggers
+                if any(key in h_text or key in h_id for key in story_keywords):
+                    if in_story:
+                        current_content.append(f"<br><h3>{tag.get_text().strip()}</h3>")
+                    else:
+                        in_story = True
+                        current_content = []
+                    continue
+                
+                # If we hit an unrelated H2, end the current block
+                if in_story and tag.name == 'h2':
+                    if len("".join(current_content)) > len("".join(best_content)):
+                        best_content = current_content
+                    in_story = False
+                    current_content = []
+                    continue
+                    
+                # Sub-headers (Act I, Cold Open, etc.)
+                if in_story and tag.name in ['h3', 'h4']:
+                    txt = tag.get_text().strip()
+                    if txt:
+                        current_content.append(f"<br><h3>{txt}</h3>")
+                    continue
+                    
+            elif tag.name in ['p', 'ul', 'ol'] and in_story:
+                txt = tag.get_text().strip()
+                if txt:
+                    current_content.append(f"<p>{txt}</p>")
+                    
+        # Catch any trailing plot data
+        if in_story and len("".join(current_content)) > len("".join(best_content)):
+            best_content = current_content
+            
+        if best_content: 
+            return "".join(best_content), page_url
+            
+    except Exception: 
+        pass
     return None, None
 
 # --- EPUB COMPILER WITH TVMAZE BACKUP ---
@@ -282,44 +329,4 @@ try:
                 """, unsafe_allow_html=True)
 
                 st.subheader(f"S{st.session_state.s_val}E{st.session_state.ep_val}: {st.session_state.ep_name}")
-                if st.session_state.image_url: st.image(st.session_state.image_url, use_container_width=True)
-                
-                if st.button("🔊 Generate Audio Narration", use_container_width=True):
-                    with st.spinner(f"Synthesizing {voice_setting.split(' ')[0]}'s voice..."):
-                        clean_tts_text = BeautifulSoup(st.session_state.lore_text, "html.parser").get_text(separator=' ')
-                        create_audio(clean_tts_text, voice_setting)
-                        with open("lore.mp3", "rb") as f:
-                            st.session_state.b64_audio = base64.b64encode(f.read()).decode()
-
-                if st.session_state.b64_audio:
-                    realtime_player_html = f"""
-                    <!DOCTYPE html>
-                    <html>
-                    <head><style>body {{ margin: 0; padding: 0; background-color: transparent; }} .player-box {{ background-color: {current_theme['player']}; padding: 15px; border-radius: 10px; border-left: 4px solid {current_theme['accent']}; font-family: sans-serif; color: {current_theme['text']}; }}</style></head>
-                    <body>
-                        <div class="player-box">
-                            <audio id="narrator-audio" controls autoplay style="width: 100%;"><source src="data:audio/mp3;base64,{st.session_state.b64_audio}" type="audio/mp3"></audio>
-                            <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 12px;">
-                                <label for="speed-slider" style="font-size: 0.95rem; font-weight: 500;">🏃 Playback Speed: <span id="speed-display">1.0x</span></label>
-                                <input type="range" id="speed-slider" min="0.5" max="2.0" step="0.1" value="1.0" style="width: 50%; cursor: pointer;">
-                            </div>
-                        </div>
-                        <script>
-                            const audio = document.getElementById("narrator-audio");
-                            const slider = document.getElementById("speed-slider");
-                            const display = document.getElementById("speed-display");
-                            slider.addEventListener("input", function() {{ audio.playbackRate = this.value; display.textContent = parseFloat(this.value).toFixed(1) + "x"; }});
-                        </script>
-                    </body>
-                    </html>
-                    """
-                    components.html(realtime_player_html, height=120)
-
-                st.markdown(f'<div class="pro-reader">{st.session_state.lore_text}</div>', unsafe_allow_html=True)
-                st.caption(f"Source: [Link]({st.session_state.wiki_url})")
-                
-                st.divider()
-                st.button(f"⏭️ Load Season {st.session_state.s_val}, Episode {st.session_state.ep_val + 1}", on_click=load_next_episode, use_container_width=True)
-
-except Exception as e:
-    st.error(f"System Error: {e}")
+                if st.session_state.image_url: st.image(st.session
