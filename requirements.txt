@@ -8,3 +8,4 @@ markdown
 beautifulsoup4
 lxml
 openai
+duckduckgo-search
