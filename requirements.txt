@@ -6,4 +6,4 @@ edge-tts
 EbookLib
 markdown
 beautifulsoup4
-
+lxml
