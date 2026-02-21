@@ -2,8 +2,10 @@ import streamlit as st
 import requests
 import os
 import re
-import tempfile
-import subprocess
+import asyncio
+import edge_tts
+import base64
+import streamlit.components.v1 as components
 from google import genai
 from openai import OpenAI
 
@@ -34,6 +36,8 @@ if "current_title" not in st.session_state:
     st.session_state.current_title = None
 if "audio_bytes" not in st.session_state:
     st.session_state.audio_bytes = None
+if "b64_audio" not in st.session_state:
+    st.session_state.b64_audio = None
 
 # --- CALLBACKS ---
 def prev_issue():
@@ -120,55 +124,30 @@ def generate_ai_summary(issue_data, series_name, issue_num):
             return comp.choices[0].message.content
         return "AI Error"
 
-# --- BULLETPROOF EDGE TTS FUNCTION (FILE METHOD) ---
-def get_audio_sync(text, voice, speed):
+# --- NEURAL TTS HELPER ---
+async def generate_neural_audio(text, voice, filename="summary_temp.mp3"):
+    communicate = edge_tts.Communicate(text, voice)
+    await communicate.save(filename)
+
+def create_audio(text, voice_choice):
     if not text or len(text.strip()) == 0:
         return None
         
-    # Clean up weird characters
-    clean = re.sub(r'[^a-zA-Z0-9\s.,!?\'"-]', '', text).strip()[:4000]
+    clean_text = re.sub(r'[^a-zA-Z0-9\s.,!?\'"-]', '', text).strip()[:4000]
+    filename = "summary_temp.mp3"
     
     try:
-        # 1. Create a temp file for the TEXT
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".txt", mode="w", encoding="utf-8") as txt_fp:
-            txt_fp.write(clean)
-            txt_path = txt_fp.name
-
-        # 2. Create a temp file for the AUDIO
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as mp3_fp:
-            mp3_path = mp3_fp.name
-            
-        # 3. Build the command-line instruction USING THE FILE (-f)
-        cmd = [
-            "edge-tts",
-            "--voice", voice,
-            "-f", txt_path,          # Tell it to read from the text file
-            "--write-media", mp3_path
-        ]
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(generate_neural_audio(clean_text, voice_choice, filename))
         
-        if speed != 1.0:
-            pct = int(round((speed - 1) * 100))
-            speed_str = f"{'+' if pct >= 0 else ''}{pct}%"
-            cmd.extend(["--rate", speed_str])
-            
-        # Run the command silently
-        subprocess.run(cmd, check=True, capture_output=True)
-        
-        # Read the audio bytes
-        with open(mp3_path, "rb") as f:
+        with open(filename, "rb") as f:
             audio_data = f.read()
             
-        # Clean up both temporary files
-        os.remove(txt_path)
-        os.remove(mp3_path)
-        
-        return audio_data if audio_data else None
-        
-    except subprocess.CalledProcessError as e:
-        st.error(f"Edge-TTS Server Error: {e.stderr.decode()}")
-        return None
+        os.remove(filename)
+        return audio_data
     except Exception as e:
-        st.error(f"System Error: {e}")
+        st.error(f"TTS Error: {e}")
         return None
 
 # --- UI ---
@@ -187,13 +166,15 @@ with st.sidebar:
     st.divider()
     st.header("Voice Settings")
     voice_map = {
-        "Guy (Male/Authoritative)": "en-US-GuyNeural",
-        "Ava (Female/Clear)": "en-US-AvaNeural",
-        "Andrew (Male/Deep)": "en-US-AndrewNeural",
-        "Emma (Female/Friendly)": "en-GB-EmmaNeural"
+        "Christopher (Deep, Cinematic)": "en-US-ChristopherNeural",
+        "Aria (Clear, Professional)": "en-US-AriaNeural",
+        "Guy (Casual, Conversational)": "en-US-GuyNeural",
+        "Jenny (Friendly, Upbeat)": "en-US-JennyNeural",
+        "Steffan (Authoritative, Clear)": "en-US-SteffanNeural",
+        "Ryan (British, Sophisticated)": "en-GB-RyanNeural",
+        "Natasha (Australian, Smooth)": "en-AU-NatashaNeural"
     }
     sel_voice_label = st.selectbox("Narrator", options=list(voice_map.keys()))
-    v_speed = st.slider("Reading Speed", 0.5, 2.0, 1.0, 0.1)
     
     st.divider()
     st.header("Search")
@@ -227,12 +208,17 @@ if query and 'vid' in locals() and trigger:
             if st.session_state.current_title not in st.session_state.history:
                 st.session_state.history.append(st.session_state.current_title)
             
-            # Generate Audio using Subprocess Sync Wrapper
             if summary:
-                audio = get_audio_sync(summary, voice_map[sel_voice_label], v_speed)
-                st.session_state.audio_bytes = audio
+                selected_voice_code = voice_map[sel_voice_label]
+                audio_bytes = create_audio(summary, selected_voice_code)
+                st.session_state.audio_bytes = audio_bytes
+                if audio_bytes:
+                    st.session_state.b64_audio = base64.b64encode(audio_bytes).decode()
+                else:
+                    st.session_state.b64_audio = None
             else:
                 st.session_state.audio_bytes = None
+                st.session_state.b64_audio = None
         else:
             st.error("Issue not found.")
 
@@ -246,11 +232,39 @@ if st.session_state.current_summary:
         with st.container(border=True): 
             st.markdown(st.session_state.current_summary)
         
-        # Audio Player UI
+        # Custom Realtime Audio Player UI
         st.divider()
         st.caption("🎧 **Listen to the Deep Dive**")
-        if st.session_state.audio_bytes:
-            st.audio(st.session_state.audio_bytes, format='audio/mp3')
+        
+        if st.session_state.b64_audio:
+            current_theme = {
+                'player': '#1a1c24',
+                'accent': '#00d4ff',
+                'text': '#ffffff'
+            }
+            
+            realtime_player_html = f"""
+            <!DOCTYPE html>
+            <html>
+            <head><style>body {{ margin: 0; padding: 0; background-color: transparent; }} .player-box {{ background-color: {current_theme['player']}; padding: 15px; border-radius: 10px; border-left: 4px solid {current_theme['accent']}; font-family: sans-serif; color: {current_theme['text']}; }}</style></head>
+            <body>
+                <div class="player-box">
+                    <audio id="narrator-audio" controls autoplay style="width: 100%;"><source src="data:audio/mp3;base64,{st.session_state.b64_audio}" type="audio/mp3"></audio>
+                    <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 12px;">
+                        <label for="speed-slider" style="font-size: 0.95rem; font-weight: 500;">🏃 Playback Speed: <span id="speed-display">1.0x</span></label>
+                        <input type="range" id="speed-slider" min="0.5" max="2.0" step="0.1" value="1.0" style="width: 50%; cursor: pointer;">
+                    </div>
+                </div>
+                <script>
+                    const audio = document.getElementById("narrator-audio");
+                    const slider = document.getElementById("speed-slider");
+                    const display = document.getElementById("speed-display");
+                    slider.addEventListener("input", function() {{ audio.playbackRate = this.value; display.textContent = parseFloat(this.value).toFixed(1) + "x"; }});
+                </script>
+            </body>
+            </html>
+            """
+            components.html(realtime_player_html, height=120)
             
             # Download Button
             safe_title = "".join([c for c in st.session_state.current_title if c.isalpha() or c.isdigit() or c==' ']).rstrip()
@@ -262,5 +276,4 @@ if st.session_state.current_summary:
                 use_container_width=True
             )
         else:
-            st.warning("⚠️ Audio could not be generated. Check for red error boxes above.")
-
+            st.warning("⚠️ Audio could not be generated.")
