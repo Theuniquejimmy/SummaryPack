@@ -1,16 +1,15 @@
 import streamlit as st
 import requests
 import os
-import time
 import re
 import asyncio
 import edge_tts
 import base64
 import json
+import time
 import streamlit.components.v1 as components
-from duckduckgo_search import DDGS
+from tavily import TavilyClient
 from google import genai
-from google.genai import types
 from openai import OpenAI
 
 # --- CONFIGURATION & STYLING ---
@@ -59,6 +58,10 @@ if "current_img" not in st.session_state:
     st.session_state.current_img = None
 if "current_title" not in st.session_state:
     st.session_state.current_title = None
+if "current_writers" not in st.session_state:
+    st.session_state.current_writers = None
+if "current_artists" not in st.session_state:
+    st.session_state.current_artists = None
 if "audio_bytes" not in st.session_state:
     st.session_state.audio_bytes = None
 if "b64_audio" not in st.session_state:
@@ -98,6 +101,7 @@ def load_from_history():
 COMIC_VINE_KEY = os.environ.get("COMIC_VINE_KEY")
 GEMINI_KEY = os.environ.get("GEMINI_KEY")
 NVIDIA_API_KEY = os.environ.get("NVIDIA_API_KEY")
+TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
 
 if not COMIC_VINE_KEY or not GEMINI_KEY:
     st.error("Missing API Keys! Please check your environment variables.")
@@ -108,6 +112,7 @@ nvidia_client = OpenAI(
   base_url="https://integrate.api.nvidia.com/v1",
   api_key=NVIDIA_API_KEY
 ) if NVIDIA_API_KEY else None
+tavily_client = TavilyClient(api_key=TAVILY_API_KEY) if TAVILY_API_KEY else None
 
 # --- HELPERS ---
 @st.cache_data
@@ -124,37 +129,36 @@ def fetch_volumes(query):
 @st.cache_data
 def get_issue_data(volume_id, issue_num):
     url = "https://comicvine.gamespot.com/api/issues/"
-    # Pulling 'person_credits' to get the exact writers and artists
     params = {"api_key": COMIC_VINE_KEY, "format": "json", "filter": f"volume:{volume_id},issue_number:{issue_num}", "field_list": "name,deck,description,character_credits,person_credits,image"}
     try:
         res = requests.get(url, params=params, headers={"User-Agent": "ComicVault/1.0"}).json()
         return res.get('results', [])[0] if res.get('results') else None
     except Exception: return None
 
-# --- AGENT 1: THE RESEARCHER ---
+# --- AGENT 1: THE RESEARCHER (TAVILY API) ---
 def get_plot_from_search(series_name, issue_num, creators):
-    st.toast("🔍 Deploying Gemini Search Agent to find missing plot...")
+    """A dedicated AI search agent using Tavily to scrape missing plots."""
+    if not tavily_client:
+        return "Tavily API key missing. Cannot search the web."
+        
+    st.toast("🔍 Comic Vine plot missing! Deploying Tavily Search Agent...")
     
-    from google.genai import types
-    research_prompt = f"What is the exact, detailed plot synopsis of the comic book '{series_name}' issue #{issue_num} written by {creators}?"
-    google_tool = types.Tool(google_search=types.GoogleSearch())
+    clean_series = re.sub(r'[^a-zA-Z0-9\s]', '', series_name)
+    search_query = f"site:marvel.fandom.com OR site:dc.fandom.com {clean_series} issue {issue_num} {creators} plot synopsis"
     
-    # Auto-Retry Loop (Tries 3 times)
     for attempt in range(3):
         try:
-            resp = ai_client.models.generate_content(
-                model="gemini-2.0-flash", 
-                contents=research_prompt,
-                config=types.GenerateContentConfig(tools=[google_tool])
-            )
-            return f"WEB SEARCH RESULTS: {resp.text}"
+            # search_depth="advanced" tells Tavily to scrape the site content thoroughly
+            response = tavily_client.search(query=search_query, search_depth="advanced", max_results=3)
+            
+            if response and 'results' in response:
+                web_plot = " ".join([res['content'] for res in response['results']])
+                return f"WIKI SEARCH RESULTS: {web_plot}"
+            return "Search completed but no plot data found."
         except Exception as e:
-            if "429" in str(e):
-                st.toast(f"⏳ Rate limit hit. Pausing for 5 seconds... (Attempt {attempt+1}/3)")
-                time.sleep(5) # Wait 5 seconds and try again
-            else:
-                return "Search failed due to an unknown API error."
-                
+            st.toast(f"⏳ Network hiccup. Retrying... (Attempt {attempt+1}/3)")
+            time.sleep(2)
+            
     return "Search failed. Do your best to recall."
 
 # --- AGENT 2: THE HISTORIAN ---
@@ -169,7 +173,7 @@ def generate_ai_summary(issue_data, series_name, issue_num):
     prompt = f"""
     You are an expert comic book historian. Write a highly detailed, 500+ word deep-dive summary into {series_name} #{issue_num} by {creators}.
     
-    Use the "Plot Snippet" below as your absolute source of truth for what happens in this issue. 
+    Use the "Plot Snippet" below as your absolute source of truth for what happens in this issue. Do not guess the plot if data is provided.
     
     Structure your response using Markdown headings for these exact sections:
     ### 🌍 Context & Background
@@ -185,7 +189,6 @@ def generate_ai_summary(issue_data, series_name, issue_num):
     Plot Snippet: {plot}
     """
     
-    # Auto-Retry Loop for the Historian
     for attempt in range(3):
         try:
             resp = ai_client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
@@ -195,9 +198,8 @@ def generate_ai_summary(issue_data, series_name, issue_num):
                 st.toast(f"⏳ Rate limit hit writing essay. Pausing for 5 seconds... (Attempt {attempt+1}/3)")
                 time.sleep(5)
             else:
-                break # If it's not a 429, break the loop and trigger NVIDIA
+                break 
                 
-    # Fallback to NVIDIA if Gemini completely fails
     if nvidia_client:
         st.caption("ℹ️ *Gemini unavailable. Using NVIDIA Backup...*")
         try:
@@ -210,7 +212,7 @@ def generate_ai_summary(issue_data, series_name, issue_num):
              return f"NVIDIA Error: {nvidia_err}"
              
     return "AI Error: Both primary and backup APIs failed."
-        
+
 # --- NEURAL TTS HELPER ---
 async def generate_neural_audio(text, voice, filename="summary_temp.mp3"):
     communicate = edge_tts.Communicate(text, voice)
@@ -241,7 +243,6 @@ def create_audio(text, voice_choice):
 st.title("📚 Comic Vault Analyzer")
 
 with st.sidebar:
-    # 1. SEARCH AT THE TOP
     st.header("🔍 Search")
     query = st.text_input("Series", key="search_query")
     if query:
@@ -263,7 +264,6 @@ with st.sidebar:
 
     st.divider()
     
-    # 2. VOICE SETTINGS IN THE MIDDLE
     st.header("Voice Settings")
     voice_map = {
         "Christopher (Deep, Cinematic)": "en-US-ChristopherNeural",
@@ -278,7 +278,6 @@ with st.sidebar:
     
     st.divider()
 
-    # 3. HISTORY AT THE BOTTOM
     st.header("🕰️ History")
     if st.session_state.history:
         st.selectbox("Recent:", ["Select..."] + list(reversed(st.session_state.history)), key="history_selector", on_change=load_from_history)
@@ -298,7 +297,14 @@ if query and 'vid' in locals() and trigger:
             st.session_state.current_img = data.get('image', {}).get('medium_url')
             st.session_state.current_title = f"{sel_vol} #{st.session_state.issue_num}"
             
-            # Save history persistently
+            # Extract Creators for the UI
+            creators = data.get('person_credits') or []
+            writers = [c['name'] for c in creators if 'writer' in c.get('role', '').lower()]
+            artists = [c['name'] for c in creators if 'artist' in c.get('role', '').lower() or 'penciler' in c.get('role', '').lower()]
+            
+            st.session_state.current_writers = ", ".join(writers) if writers else "Unknown Writer"
+            st.session_state.current_artists = ", ".join(artists) if artists else "Unknown Artist"
+            
             if st.session_state.current_title not in st.session_state.history:
                 st.session_state.history.append(st.session_state.current_title)
                 save_history(st.session_state.history)
@@ -319,6 +325,8 @@ if st.session_state.current_summary:
             st.image(st.session_state.current_img)
     with col_b:
         st.subheader(st.session_state.current_title)
+        st.caption(f"✍️ **Writer:** {st.session_state.current_writers} | 🎨 **Artist:** {st.session_state.current_artists}")
+        
         with st.container(border=True): 
             st.markdown(st.session_state.current_summary)
         
@@ -380,10 +388,3 @@ if st.session_state.current_summary:
             )
         else:
             st.warning("⚠️ Audio could not be generated.")
-
-
-
-
-
-
-
