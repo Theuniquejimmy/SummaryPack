@@ -144,17 +144,15 @@ def get_plot_from_search(series_name, issue_num, creators):
     st.toast("🔍 Comic Vine plot missing! Deploying Tavily Search Agent...")
     
     clean_series = re.sub(r'[^a-zA-Z0-9\s]', '', series_name)
-    search_query = f"site:marvel.fandom.com OR site:dc.fandom.com {clean_series} issue {issue_num} {creators} plot synopsis"
+    # THE FIX 1: Tighter search query to prevent pulling arc summaries instead of single issues
+    search_query = f"site:fandom.com {clean_series} \"issue {issue_num}\" OR \"#{issue_num}\" plot synopsis"
     
     for attempt in range(3):
         try:
             response = tavily_client.search(query=search_query, search_depth="advanced", max_results=3)
             if response and 'results' in response:
                 web_plot = " ".join([res['content'] for res in response['results']])
-                
-                # THE TOKEN FIX: Truncate the web output so we don't hit the 429 TPM limit
                 web_plot = web_plot[:6000]
-                
                 return f"WIKI SEARCH RESULTS: {web_plot}"
             return "Search completed but no plot data found."
         except Exception as e:
@@ -173,10 +171,14 @@ def generate_ai_summary(issue_data, series_name, issue_num):
     if len(plot.strip()) < 50:
         plot = get_plot_from_search(series_name, issue_num, creators)
     
+    # THE FIX 2: The Sniper Filter Prompt
     prompt = f"""
     You are an expert comic book historian. Write a highly detailed, 500+ word deep-dive summary into {series_name} #{issue_num} by {creators}.
     
-    Use the "Plot Snippet" below as your absolute source of truth for what happens in this issue. Do not guess the plot if data is provided.
+    CRITICAL FILTERING INSTRUCTION: 
+    The "Plot Snippet" below contains raw web search results. It might contain summaries for MULTIPLE issues or the wrong issue entirely. 
+    You MUST carefully read the snippet and ONLY summarize the events that happen EXACTLY in issue #{issue_num}. Ignore events from previous or future issues.
+    If the snippet clearly does not contain the plot for #{issue_num}, explicitly state: "The exact plot details for this specific issue are currently unavailable." Do not guess or use another issue's plot.
     
     Structure your response using Markdown headings for these exact sections:
     ### 🌍 Context & Background
@@ -392,3 +394,4 @@ if st.session_state.current_summary:
             )
         else:
             st.warning("⚠️ Audio could not be generated.")
+
