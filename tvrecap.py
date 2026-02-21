@@ -25,6 +25,8 @@ if 'b64_audio' not in st.session_state: st.session_state.b64_audio = None
 if 'ep_list' not in st.session_state: st.session_state.ep_list = []
 if 'image_url' not in st.session_state: st.session_state.image_url = None
 if 'ep_name' not in st.session_state: st.session_state.ep_name = ""
+if 's_val' not in st.session_state: st.session_state.s_val = 1
+if 'ep_val' not in st.session_state: st.session_state.ep_val = 1
 
 # --- NEURAL TTS HELPER ---
 async def generate_neural_audio(text, voice, filename="lore.mp3"):
@@ -85,7 +87,7 @@ st.title("📺 TV Vault Pro")
 with st.sidebar:
     st.header("Search & Settings")
     app_mode = st.radio("Recap Mode:", ["Single Episode", "Full Season"])
-    query = st.text_input("Search Show", placeholder="e.g. The Bear")
+    query = st.text_input("Search Show", placeholder="e.g. Buffy the Vampire Slayer")
 
 if query:
     url = f"https://api.tvmaze.com/search/shows?q={query}"
@@ -96,7 +98,8 @@ if query:
         for item in resp:
             s = item.get('show', {})
             p_date = s.get('premiered')
-            year = p_date[:4] if p_date else "????"
+            # Safety slice for year
+            year = str(p_date)[:4] if p_date else "????"
             label = f"{s.get('name')} ({year})"
             show_options[label] = s.get('id')
             
@@ -120,15 +123,20 @@ if query:
                     st.session_state.ep_name = ep_data.get('name')
                     st.session_state.image_url = ep_data.get('image', {}).get('medium')
                     st.session_state.ep_list = []
-                    summary_context = re.sub('<[^<]+>', '', ep_data.get('summary', ''))
+                    
+                    # Safety check for Single Episode summary
+                    raw_sum = ep_data.get('summary') if ep_data.get('summary') else ""
+                    summary_context = re.sub('<[^<]+>', '', raw_sum)
                     prompt = f"Provide a detailed, witty recap of {clean_title} S{s_val_input}E{ep_val_input}. Context: {summary_context}"
                 else:
                     seasons = requests.get(f"https://api.tvmaze.com/shows/{show_id}/seasons").json()
-                    target_s = next((s for s in seasons if s['number'] == s_val_input), seasons[0])
+                    target_s = next((s for s in seasons if s.get('number') == s_val_input), seasons[0])
                     st.session_state.ep_list = requests.get(f"https://api.tvmaze.com/seasons/{target_s['id']}/episodes").json()
                     st.session_state.ep_name = f"Season {s_val_input} Complete"
                     st.session_state.image_url = target_s.get('image', {}).get('medium')
-                    summary_context = " ".join([re.sub('<[^<]+>', '', e.get('summary','')) for e in st.session_state.ep_list])[:4000]
+                    
+                    # Safety check for Season List comprehension
+                    summary_context = " ".join([re.sub('<[^<]+>', '', e.get('summary')) for e in st.session_state.ep_list if e.get('summary')])[:4000]
                     prompt = f"Provide a deep-dive season recap for {clean_title} Season {s_val_input}. Context: {summary_context}"
 
                 try:
@@ -185,7 +193,6 @@ if query:
                             st.session_state.b64_audio = base64.b64encode(f.read()).decode()
 
             if st.session_state.b64_audio:
-                # Using a standard string with .replace() to avoid f-string curly brace issues
                 player_html = """
                 <div style="background-color: PLAYER_BG; padding: 15px; border-radius: 10px; border-left: 4px solid ACCENT_COLOR; color: TEXT_COLOR;">
                     <audio id="narrator-audio" controls autoplay style="width: 100%;"><source src="data:audio/mp3;base64,AUDIO_DATA" type="audio/mp3"></audio>
@@ -204,11 +211,7 @@ if query:
                     };
                 </script>
                 """
-                player_html = player_html.replace("PLAYER_BG", current_theme['player'])
-                player_html = player_html.replace("ACCENT_COLOR", current_theme['accent'])
-                player_html = player_html.replace("TEXT_COLOR", current_theme['text'])
-                player_html = player_html.replace("AUDIO_DATA", st.session_state.b64_audio)
-                
+                player_html = player_html.replace("PLAYER_BG", current_theme['player']).replace("ACCENT_COLOR", current_theme['accent']).replace("TEXT_COLOR", current_theme['text']).replace("AUDIO_DATA", st.session_state.b64_audio)
                 components.html(player_html, height=130)
 
     else:
