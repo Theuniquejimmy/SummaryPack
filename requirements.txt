@@ -10,4 +10,5 @@ lxml
 openai
 duckduckgo-search
 cohere
+tavily-python
 
