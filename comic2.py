@@ -88,7 +88,7 @@ def get_issue_data(volume_id, issue_num):
 
 def generate_ai_summary(issue_data, series_name, issue_num):
     chars = ", ".join([c['name'] for c in (issue_data.get('character_credits') or [])])
-    plot = str(issue_data.get('deck') or issue_data.get('description') or "No data")[:5000]
+    plot = str(issue_data.get('deck') or issue_data.get('description') or "No data")[:9000]
     prompt = f"Expert comic historian deep-dive: {series_name} #{issue_num}. Sections: Context, Plot, Key Moments, Significance. No spoilers. No Markdown. Plot: {plot}. Characters: {chars}"
     try:
         resp = ai_client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
@@ -195,3 +195,4 @@ if st.session_state.current_summary:
         # Audio Player
         if "audio_bytes" in st.session_state and st.session_state.audio_bytes:
             st.audio(st.session_state.audio_bytes, format='audio/mp3')
+
