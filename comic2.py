@@ -39,7 +39,7 @@ def fetch_volumes(query):
         "format": "json",
         "query": query,
         "resources": "volume",
-        "limit": 20
+        "limit": 50
     }
     headers = {"User-Agent": "ComicVaultStreamlit/1.0"}
     try:
@@ -155,3 +155,4 @@ if series_query and 'volume_id' in locals():
             else:
 
                 st.error(f"Issue #{issue_num} not found.")
+
