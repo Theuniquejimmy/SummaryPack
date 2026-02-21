@@ -136,14 +136,18 @@ def get_plot_from_search(series_name, issue_num, creators):
     st.toast("🔍 Deploying Gemini Search Agent to find missing plot...")
     try:
         from google.genai import types
-        # A very simple, strict prompt just for searching
-        research_prompt = f"Search Google and tell me exactly what happens in the plot of the comic book '{series_name} #{issue_num}' by {creators}. Be highly detailed about the events."
+        
+        # A direct, question-based prompt triggers Google's backend search much better
+        research_prompt = f"What is the exact, detailed plot synopsis of the comic book '{series_name}' issue #{issue_num} written by {creators}?"
+        
+        # THE FIX: This is the exact strict syntax required by the new Google GenAI SDK
+        google_tool = types.Tool(google_search=types.GoogleSearch())
         
         resp = ai_client.models.generate_content(
             model="gemini-2.0-flash", 
             contents=research_prompt,
             config=types.GenerateContentConfig(
-                tools=[{"google_search": {}}]
+                tools=[google_tool]  # <-- Now the internet is actually turned on!
             )
         )
         return f"WEB SEARCH RESULTS: {resp.text}"
@@ -368,6 +372,7 @@ if st.session_state.current_summary:
             )
         else:
             st.warning("⚠️ Audio could not be generated.")
+
 
 
 
