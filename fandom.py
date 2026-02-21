@@ -17,7 +17,8 @@ WIKI_ALIASES = {
     "The Incredible Hulk": "marvelcinematicuniverse",
     "X-Men '97": "xmen97",
     "The Wheel of Time": "wot",
-    "Gilmore Girls": "gilmoregirls"
+    "Gilmore Girls": "gilmoregirls",
+    "ER": "er"
 }
 
 # --- NEURAL TTS HELPER ---
@@ -73,20 +74,22 @@ def get_raw_lore(wiki_slug, ep_title):
             if any(key in h_text or key in h_id or key in span_id for key in story_keywords):
                 content = []
                 for sibling in header.find_next_siblings():
-                    if sibling.name == 'h2': 
-                        break
-                        
-                    if sibling.name in ['h3', 'h4']:
+                    if sibling.name in ['h2', 'h3', 'h4']:
                         h_text_sib = sibling.get_text().strip()
-                        stop_words = ['cast', 'trivia', 'gallery', 'references', 'production', 'credits', 'quotes', 'videos']
-                        if any(stop in h_text_sib.lower() for stop in stop_words): break 
-                        if h_text_sib: content.append(f"<br><h3>{h_text_sib}</h3>")
+                        stop_words = [
+                            'cast', 'trivia', 'gallery', 'references', 'production', 
+                            'credits', 'quotes', 'videos', 'music', 'notes', 
+                            'continuity', 'external links', 'see also', 'reception', 'external'
+                        ]
+                        if any(stop in h_text_sib.lower() for stop in stop_words): 
+                            break 
+                        if h_text_sib: 
+                            content.append(f"<br><h3>{h_text_sib}</h3>")
                         
                     elif sibling.name in ['p', 'ul', 'ol']:
                         txt = sibling.get_text().strip()
                         if txt: content.append(f"<p>{txt}</p>")
                 
-                # Compare section lengths
                 if len("".join(content)) > len("".join(best_content)):
                     best_content = content
         
@@ -179,8 +182,8 @@ st.title("📖 TV Vault Reader")
 
 query = st.text_input("Search for a show:", placeholder="e.g. Invincible")
 
-if query:
-    try: # <--- THIS IS THE TRY STATEMENT THAT MUST BE CLOSED AT THE BOTTOM
+try:
+    if query:
         resp = requests.get(f"https://api.tvmaze.com/search/shows?q={query}").json()
         if resp:
             show_options = {f"{i['show']['name']} ({i['show'].get('premiered','?').split('-')[0]})": i['show'] for i in resp}
@@ -217,7 +220,6 @@ if query:
                 if api_res.status_code == 200:
                     api_data = api_res.json()
                     if "name" in api_data:
-                        
                         raw_text, found_url = get_raw_lore(wiki_slug, api_data['name'])
                         tvmaze_summary = api_data.get('summary', '')
                         
@@ -309,6 +311,5 @@ if query:
                 st.divider()
                 st.button(f"⏭️ Load Season {st.session_state.s_val}, Episode {st.session_state.ep_val + 1}", on_click=load_next_episode, use_container_width=True)
 
-    # --- THIS IS THE CRITICAL MISSING BLOCK ---
-    except Exception as e:
-        st.error(f"System Error: {e}")
+except Exception as e:
+    st.error(f"System Error: {e}")
