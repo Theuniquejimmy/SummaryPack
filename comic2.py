@@ -11,6 +11,7 @@ import streamlit.components.v1 as components
 from google import genai
 from google.genai import types
 from openai import OpenAI
+import cohere
 
 # --- CONFIGURATION & STYLING ---
 st.set_page_config(page_title="Comic Vault Analyzer", layout="wide")
@@ -96,7 +97,8 @@ def load_from_history():
 # --- API KEYS ---
 COMIC_VINE_KEY = os.environ.get("COMIC_VINE_KEY")
 GEMINI_KEY = os.environ.get("GEMINI_KEY")
-NVIDIA_API_KEY = os.environ.get("NVIDIA_API_KEY")
+COHERE_API_KEY = os.environ.get("COHERE_API_KEY")
+co_client = cohere.Client(COHERE_API_KEY) if COHERE_API_KEY else None
 
 if not COMIC_VINE_KEY or not GEMINI_KEY:
     st.error("Missing API Keys! Please check your environment variables.")
@@ -138,28 +140,12 @@ def get_issue_data(volume_id, issue_num):
 def generate_ai_summary(issue_data, series_name, issue_num):
     chars = ", ".join([c['name'] for c in (issue_data.get('character_credits') or [])])
     creators = ", ".join([p['name'] for p in (issue_data.get('person_credits') or [])])
-    
-    # Grab whatever Comic Vine gave us
-    plot = str(issue_data.get('deck') or issue_data.get('description') or "")[:5000]
-    
-    # --- THE DUCKDUCKGO FAILSAFE ---
-    # If Comic Vine gave us a blank or uselessly short plot, search the web!
-    if len(plot.strip()) < 50:
-        st.toast("🔍 Comic Vine plot missing! Searching the web for backup lore...")
-        try:
-            search_query = f"{series_name} #{issue_num} comic plot synopsis {creators}"
-            ddg_results = DDGS().text(search_query, max_results=3)
-            # Combine the search snippets into a makeshift plot
-            web_plot = " ".join([res['body'] for res in ddg_results])
-            plot = f"WEB SEARCH RESULTS (Use this to figure out the plot): {web_plot}"
-        except Exception as e:
-            plot = "No plot data available. Do your best to recall the events from your training data."
+    plot = str(issue_data.get('deck') or issue_data.get('description') or "No data provided.")[:5000]
     
     prompt = f"""
     Act as a passionate, encyclopedic comic book historian. Your goal is to write a highly detailed, comprehensive deep-dive into {series_name} #{issue_num}. 
     
-    CRITICAL INSTRUCTION: Pay close attention to the release year in the series name ({series_name}) and the creative team ({creators}). 
-    Do not confuse this with other volumes or eras of the same title. Use the "Plot Snippet" below as your absolute source of truth for what happens in this issue.
+    CRITICAL INSTRUCTION: You MUST use your web search tool to look up the EXACT plot of {series_name} #{issue_num} (written by {creators}). Go to comic wikis or fandom pages to verify what happens before writing. Do not guess.
     
     Structure your response using Markdown headings for these exact sections:
     
@@ -175,10 +161,6 @@ def generate_ai_summary(issue_data, series_name, issue_num):
     ### 🏛️ Legacy & Significance
     Why does this issue matter? Discuss its impact or how it sets up the future.
     
-    RULES:
-    - Output must be 500-800 words.
-    - Be enthusiastic and authoritative.
-    
     RAW DATA:
     Series: {series_name}
     Issue: {issue_num}
@@ -189,17 +171,28 @@ def generate_ai_summary(issue_data, series_name, issue_num):
     
     # Try Gemini First
     try:
-        resp = ai_client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
+        from google.genai import types
+        resp = ai_client.models.generate_content(
+            model="gemini-2.0-flash", 
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                tools=[{"google_search": {}}]
+            )
+        )
         return resp.text
     except Exception as e:
-        # Failsafe to NVIDIA if Gemini is out of credits
-        if nvidia_client:
-            st.caption("ℹ️ *Gemini unavailable. Using NVIDIA Backup...*")
-            comp = nvidia_client.chat.completions.create(
-                model="meta/llama-3.1-70b-instruct", 
-                messages=[{"role": "user", "content": prompt}]
-            )
-            return comp.choices[0].message.content
+        # Failsafe to Cohere with Native Web Search
+        if co_client:
+            st.caption("ℹ️ *Gemini unavailable. Using Cohere Web Search Backup...*")
+            try:
+                comp = co_client.chat(
+                    model="command-r",
+                    message=prompt,
+                    connectors=[{"id": "web-search"}] # <--- This tells Cohere to Google it!
+                )
+                return comp.text
+            except Exception as co_err:
+                return f"Cohere Error: {co_err}"
         return "AI Error: Both primary and backup APIs failed."
 
 # --- NEURAL TTS HELPER ---
@@ -371,6 +364,7 @@ if st.session_state.current_summary:
             )
         else:
             st.warning("⚠️ Audio could not be generated.")
+
 
 
 
