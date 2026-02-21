@@ -8,6 +8,7 @@ import base64
 import json
 import streamlit.components.v1 as components
 from google import genai
+from google.genai import types
 from openai import OpenAI
 
 # --- CONFIGURATION & STYLING ---
@@ -135,16 +136,13 @@ def get_issue_data(volume_id, issue_num):
 
 def generate_ai_summary(issue_data, series_name, issue_num):
     chars = ", ".join([c['name'] for c in (issue_data.get('character_credits') or [])])
-    # NEW: Extract the creators
     creators = ", ".join([p['name'] for p in (issue_data.get('person_credits') or [])])
     plot = str(issue_data.get('deck') or issue_data.get('description') or "No data")[:5000]
     
-    # NEW: Upgraded prompt that anchors the AI to the specific year and creators
     prompt = f"""
     Act as a passionate, encyclopedic comic book historian. Your goal is to write a highly detailed, comprehensive deep-dive into {series_name} #{issue_num}. 
     
-    CRITICAL ANCHOR: Pay close attention to the release year in the series name ({series_name}) and the creative team ({creators}). 
-    If the "Plot Snippet" below is blank or brief, you MUST use your internal knowledge of this specific era/run to write the summary. Do NOT confuse this with other volumes or eras of the same title.
+    CRITICAL INSTRUCTION: If the "Plot Snippet" below is blank or brief, YOU MUST USE YOUR GOOGLE SEARCH TOOL to look up the exact plot of {series_name} #{issue_num} by {creators} before writing the summary. Do not guess the plot.
     
     Structure your response using Markdown headings for these exact sections:
     
@@ -152,7 +150,7 @@ def generate_ai_summary(issue_data, series_name, issue_num):
     Explain what was happening in the comic universe leading up to this issue. Who is the creative team, and what run is this?
     
     ### 📖 Detailed Plot Summary
-    Provide an exhaustive, multi-paragraph recounting of the issue's events. 
+    Provide an exhaustive, multi-paragraph recounting of the issue's exact events. 
     
     ### 💥 Key Moments
     Use bullet points to list the most iconic panels, character beats, or reveals in this specific issue.
@@ -173,9 +171,16 @@ def generate_ai_summary(issue_data, series_name, issue_num):
     """
     
     try:
-        resp = ai_client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
+        # NEW: We are passing the Google Search tool configuration to Gemini!
+        resp = ai_client.models.generate_content(
+            model="gemini-2.0-flash", 
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                tools=[{"google_search": {}}]
+            )
+        )
         return resp.text
-    except Exception:
+    except Exception as e:
         if nvidia_client:
             st.caption("ℹ️ *Using NVIDIA Backup*")
             comp = nvidia_client.chat.completions.create(
@@ -354,4 +359,5 @@ if st.session_state.current_summary:
             )
         else:
             st.warning("⚠️ Audio could not be generated.")
+
 
