@@ -105,10 +105,8 @@ if not COMIC_VINE_KEY or not GEMINI_KEY:
     st.stop()
 
 ai_client = genai.Client(api_key=GEMINI_KEY)
-nvidia_client = OpenAI(
-  base_url="https://integrate.api.nvidia.com/v1",
-  api_key=NVIDIA_API_KEY
-) if NVIDIA_API_KEY else None
+COHERE_API_KEY = os.environ.get("COHERE_API_KEY")
+co_client = cohere.Client(COHERE_API_KEY) if COHERE_API_KEY else None
 
 # --- HELPERS ---
 @st.cache_data
@@ -364,6 +362,7 @@ if st.session_state.current_summary:
             )
         else:
             st.warning("⚠️ Audio could not be generated.")
+
 
 
 
