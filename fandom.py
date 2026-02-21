@@ -41,7 +41,7 @@ def create_audio(text, voice_choice):
     asyncio.set_event_loop(loop)
     loop.run_until_complete(generate_neural_audio(text, selected_voice))
 
-# --- THE SMART LINEAR SCRAPER (Fixes Nested Divs & Book Traps) ---
+# --- TIER 1: FANDOM SCRAPER ---
 def get_raw_lore(wiki_slug, ep_title):
     api_url = f"https://{wiki_slug.lower()}.fandom.com/api.php"
     search_params = {"action": "query", "list": "search", "srsearch": ep_title, "format": "json"}
@@ -55,7 +55,6 @@ def get_raw_lore(wiki_slug, ep_title):
         exact_title = search_results[0]["title"]
         e_lower = ep_title.lower()
         
-        # Priority 1: Force TV Episode match (bypasses book chapters)
         found_tv = False
         for res in search_results:
             t_lower = res["title"].lower()
@@ -64,7 +63,6 @@ def get_raw_lore(wiki_slug, ep_title):
                 found_tv = True
                 break
                 
-        # Priority 2: Exact Bare Match
         if not found_tv:
             for res in search_results:
                 t_lower = res["title"].lower()
@@ -85,76 +83,132 @@ def get_raw_lore(wiki_slug, ep_title):
         for edit_btn in soup.find_all('span', class_='mw-editsection'): edit_btn.decompose()
         
         story_keywords = ['plot', 'synopsis', 'summary', 'episode_summary']
-        stop_words = [
-            'cast', 'trivia', 'gallery', 'references', 'production', 
-            'credits', 'quotes', 'videos', 'music', 'notes', 
-            'continuity', 'external links', 'see also', 'reception', 
-            'external', 'locations', 'appearances'
-        ]
+        stop_words = ['cast', 'trivia', 'gallery', 'references', 'production', 'credits', 'quotes', 'videos', 'music', 'notes', 'continuity', 'external links', 'see also', 'reception', 'external', 'locations', 'appearances']
         
         best_content = []
         current_content = []
         in_story = False
         
-        # THE FIX: Linear Document Scanning (Flattens all hidden tags and boxes)
         for tag in soup.find_all(['h2', 'h3', 'h4', 'p', 'ul', 'ol']):
-            if tag.find_parent('table') or tag.find_parent('aside') or tag.get('id') == 'toc':
-                continue
+            if tag.find_parent('table') or tag.find_parent('aside') or tag.get('id') == 'toc': continue
                 
             if tag.name in ['h2', 'h3']:
-                h_text = tag.get_text().lower()
-                h_id = tag.get('id', '').lower()
-                
-                # Check for Hard Stops (Trivia, Cast, etc.)
+                h_text, h_id = tag.get_text().lower(), tag.get('id', '').lower()
                 if any(stop in h_text for stop in stop_words):
                     if in_story:
-                        if len("".join(current_content)) > len("".join(best_content)):
-                            best_content = current_content
+                        if len("".join(current_content)) > len("".join(best_content)): best_content = current_content
                         in_story = False
                         current_content = []
                     continue
                 
-                # Check for Story Triggers
                 if any(key in h_text or key in h_id for key in story_keywords):
-                    if in_story:
-                        current_content.append(f"<br><h3>{tag.get_text().strip()}</h3>")
+                    if in_story: current_content.append(f"<br><h3>{tag.get_text().strip()}</h3>")
                     else:
                         in_story = True
                         current_content = []
                     continue
                 
-                # If we hit an unrelated H2, end the current block
                 if in_story and tag.name == 'h2':
-                    if len("".join(current_content)) > len("".join(best_content)):
-                        best_content = current_content
+                    if len("".join(current_content)) > len("".join(best_content)): best_content = current_content
                     in_story = False
                     current_content = []
                     continue
                     
-                # Sub-headers (Act I, Cold Open, etc.)
                 if in_story and tag.name in ['h3', 'h4']:
                     txt = tag.get_text().strip()
-                    if txt:
-                        current_content.append(f"<br><h3>{txt}</h3>")
+                    if txt: current_content.append(f"<br><h3>{txt}</h3>")
                     continue
                     
             elif tag.name in ['p', 'ul', 'ol'] and in_story:
                 txt = tag.get_text().strip()
-                if txt:
-                    current_content.append(f"<p>{txt}</p>")
+                if txt: current_content.append(f"<p>{txt}</p>")
                     
-        # Catch any trailing plot data
         if in_story and len("".join(current_content)) > len("".join(best_content)):
             best_content = current_content
             
-        if best_content: 
-            return "".join(best_content), page_url
-            
-    except Exception: 
-        pass
+        if best_content: return "".join(best_content), page_url
+    except Exception: pass
     return None, None
 
-# --- EPUB COMPILER WITH TVMAZE BACKUP ---
+# --- TIER 2: WIKIPEDIA SCRAPER (NEW) ---
+def get_wikipedia_lore(show_name, season_num, ep_title):
+    """Scrapes the strictly formatted Wikipedia episode tables."""
+    api_url = "https://en.wikipedia.org/w/api.php"
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) TVVaultReader/1.0'}
+    
+    # Wikipedia typically stores episodes on season pages or main show pages
+    queries = [
+        f"{show_name} (season {season_num})",
+        f"List of {show_name} episodes",
+        f"{show_name} (TV series)",
+        show_name
+    ]
+    
+    for q in queries:
+        params = {"action": "parse", "page": q, "prop": "text", "format": "json", "redirects": "1"}
+        try:
+            res = requests.get(api_url, params=params, headers=headers, timeout=10).json()
+            if "parse" in res and "text" in res["parse"]:
+                html = res["parse"]["text"]["*"]
+                soup = BeautifulSoup(html, 'html.parser')
+                
+                # Wikipedia tables use <td class="summary"> or just quotes for episode titles
+                for cell in soup.find_all(['td', 'th']):
+                    cell_text = cell.get_text().replace('"', '').replace('”', '').replace('“', '').strip().lower()
+                    
+                    if ep_title.lower() == cell_text or ep_title.lower() in cell_text:
+                        # Found the title cell! The plot is always in the NEXT table row.
+                        parent_tr = cell.find_parent('tr')
+                        if parent_tr:
+                            next_tr = parent_tr.find_next_sibling('tr')
+                            if next_tr:
+                                desc_td = next_tr.find('td', class_='description')
+                                if desc_td:
+                                    content = []
+                                    for p in desc_td.find_all('p'):
+                                        txt = p.get_text().strip()
+                                        if txt: content.append(f"<p>{txt}</p>")
+                                    
+                                    # Sometimes Wikipedia doesn't use <p> tags inside the cell
+                                    if not content:
+                                        txt = desc_td.get_text().strip()
+                                        if txt: content.append(f"<p>{txt}</p>")
+                                            
+                                    if content:
+                                        page_url = f"https://en.wikipedia.org/wiki/{urllib.parse.quote(res['parse']['title'].replace(' ', '_'))}"
+                                        return "".join(content), page_url
+        except Exception:
+            continue
+            
+    return None, None
+
+# --- WATERFALL ENGINE ROUTER ---
+def fetch_best_lore(show_name, season_num, ep_title, wiki_slug, tvmaze_summary, tvmaze_url):
+    """Executes the 3-Tier Waterfall"""
+    
+    # 1. Try Fandom
+    raw_text, url = get_raw_lore(wiki_slug, ep_title)
+    text_len = len(BeautifulSoup(raw_text, "html.parser").get_text()) if raw_text else 0
+    
+    # If Fandom works and is larger than a tiny stub (300 chars), use it.
+    if raw_text and text_len > 300:
+        return raw_text, url, "Fandom"
+        
+    # 2. Try Wikipedia
+    wiki_text, wiki_url = get_wikipedia_lore(show_name, season_num, ep_title)
+    wiki_len = len(BeautifulSoup(wiki_text, "html.parser").get_text()) if wiki_text else 0
+    
+    # If Wikipedia has a decent plot, use it.
+    if wiki_text and wiki_len > 150:
+        return wiki_text, wiki_url, "Wikipedia"
+        
+    # 3. TVMaze Fallback
+    if tvmaze_summary:
+        return tvmaze_summary, tvmaze_url, "TVMaze"
+        
+    return None, None, None
+
+# --- EPUB COMPILER WITH WATERFALL ---
 def build_season_epub(show_id, show_name, season_num, wiki_slug):
     ep_data = requests.get(f"https://api.tvmaze.com/shows/{show_id}/episodes").json()
     season_episodes = [ep for ep in ep_data if ep['season'] == season_num]
@@ -174,17 +228,10 @@ def build_season_epub(show_id, show_name, season_num, wiki_slug):
     for i, ep in enumerate(season_episodes):
         status_text.text(f"Scraping Episode {ep['number']}: {ep['name']}...")
         
-        raw_text, _ = get_raw_lore(wiki_slug, ep['name'])
-        tvmaze_summary = ep.get('summary', '')
-        
-        fandom_len = len(BeautifulSoup(raw_text, "html.parser").get_text()) if raw_text else 0
-        tvmaze_len = len(BeautifulSoup(tvmaze_summary, "html.parser").get_text()) if tvmaze_summary else 0
-        
-        final_text = ""
-        if raw_text and fandom_len >= tvmaze_len:
-            final_text = raw_text
-        elif tvmaze_summary:
-            final_text = tvmaze_summary
+        final_text, _, _ = fetch_best_lore(
+            show_name, season_num, ep['name'], wiki_slug, 
+            ep.get('summary', ''), ep.get('url', '')
+        )
             
         if final_text:
             c = epub.EpubHtml(title=f"Episode {ep['number']}: {ep['name']}", file_name=f"chap_{ep['number']}.xhtml", lang='en')
@@ -226,6 +273,7 @@ if 'lore_text' not in st.session_state:
     st.session_state.ep_name = None
     st.session_state.image_url = None
     st.session_state.wiki_url = None
+    st.session_state.source = None
     st.session_state.b64_audio = None
 
 def load_next_episode():
@@ -267,7 +315,7 @@ try:
 
             st.divider()
 
-            # --- READER EXTRACTION WITH BACKUP ---
+            # --- READER EXTRACTION WITH WATERFALL ---
             if st.button("🔓 Read Single Episode", use_container_width=True) or st.session_state.auto_fetch:
                 st.session_state.auto_fetch = False
                 
@@ -277,27 +325,29 @@ try:
                 if api_res.status_code == 200:
                     api_data = api_res.json()
                     if "name" in api_data:
-                        raw_text, found_url = get_raw_lore(wiki_slug, api_data['name'])
-                        tvmaze_summary = api_data.get('summary', '')
                         
-                        fandom_len = len(BeautifulSoup(raw_text, "html.parser").get_text()) if raw_text else 0
-                        tvmaze_len = len(BeautifulSoup(tvmaze_summary, "html.parser").get_text()) if tvmaze_summary else 0
+                        # Trigger the Triple-Tier Engine
+                        final_text, final_url, source_used = fetch_best_lore(
+                            show_data['name'], st.session_state.s_val, api_data['name'], 
+                            wiki_slug, api_data.get('summary', ''), api_data.get('url', 'https://www.tvmaze.com')
+                        )
                         
-                        if raw_text and fandom_len >= tvmaze_len:
-                            st.session_state.lore_text = raw_text
-                            st.session_state.wiki_url = found_url
-                        elif tvmaze_summary:
-                            st.session_state.lore_text = tvmaze_summary
-                            st.session_state.wiki_url = api_data.get('url', 'https://www.tvmaze.com')
-                            st.toast("Fandom stub detected. Loaded higher-quality TVMaze summary!", icon="⚖️")
-                        else:
-                            st.session_state.lore_text = None
-                            st.error(f"No plot summary found on Fandom or TVMaze.")
-                            
-                        if st.session_state.lore_text:
+                        if final_text:
+                            st.session_state.lore_text = final_text
+                            st.session_state.wiki_url = final_url
+                            st.session_state.source = source_used
                             st.session_state.ep_name = api_data['name']
                             st.session_state.image_url = api_data.get('image', {}).get('original')
-                            st.session_state.b64_audio = None 
+                            st.session_state.b64_audio = None
+                            
+                            # Give the user a heads up if we fell back from Fandom
+                            if source_used == "Wikipedia":
+                                st.toast("Fandom was empty. Successfully loaded Wikipedia Plot!", icon="🏛️")
+                            elif source_used == "TVMaze":
+                                st.toast("Both Fandom and Wikipedia failed. Loaded TVMaze backup.", icon="⚠️")
+                        else:
+                            st.session_state.lore_text = None
+                            st.error(f"No plot summary found on Fandom, Wikipedia, or TVMaze.")
 
                     else: st.error("Episode name not found.")
                 else: 
@@ -363,7 +413,9 @@ try:
                     components.html(realtime_player_html, height=120)
 
                 st.markdown(f'<div class="pro-reader">{st.session_state.lore_text}</div>', unsafe_allow_html=True)
-                st.caption(f"Source: [Link]({st.session_state.wiki_url})")
+                
+                # Visual indicator of which data source won the waterfall
+                st.caption(f"Source: **{st.session_state.source}** | [Original Link]({st.session_state.wiki_url})")
                 
                 st.divider()
                 st.button(f"⏭️ Load Season {st.session_state.s_val}, Episode {st.session_state.ep_val + 1}", on_click=load_next_episode, use_container_width=True)
