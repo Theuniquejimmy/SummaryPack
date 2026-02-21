@@ -5,6 +5,7 @@ import re
 import asyncio
 import edge_tts
 import base64
+import json
 import streamlit.components.v1 as components
 from google import genai
 from openai import OpenAI
@@ -21,9 +22,30 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
+# --- PERSISTENT HISTORY HELPERS ---
+HISTORY_FILE = "comic_history.json"
+
+def load_history():
+    if os.path.exists(HISTORY_FILE):
+        try:
+            with open(HISTORY_FILE, "r") as f:
+                return json.load(f)
+        except Exception:
+            return []
+    return []
+
+def save_history(history_list):
+    try:
+        with open(HISTORY_FILE, "w") as f:
+            json.dump(history_list, f)
+    except Exception:
+        pass
+
 # --- SESSION STATE ---
 if "history" not in st.session_state:
-    st.session_state.history = []
+    st.session_state.history = load_history()
+if "search_query" not in st.session_state:
+    st.session_state.search_query = ""
 if "issue_num" not in st.session_state:
     st.session_state.issue_num = "1"
 if "auto_analyze" not in st.session_state:
@@ -38,6 +60,8 @@ if "audio_bytes" not in st.session_state:
     st.session_state.audio_bytes = None
 if "b64_audio" not in st.session_state:
     st.session_state.b64_audio = None
+if "needs_audio" not in st.session_state:
+    st.session_state.needs_audio = False
 
 # --- CALLBACKS ---
 def prev_issue():
@@ -57,6 +81,15 @@ def next_issue():
 
 def clear_history():
     st.session_state.history = []
+    save_history([])
+
+def load_from_history():
+    sel_h = st.session_state.history_selector
+    if sel_h and sel_h != "Select...":
+        parts = sel_h.split(" #")
+        st.session_state.search_query = parts[0]
+        st.session_state.issue_num = parts[1]
+        st.session_state.auto_analyze = True
 
 # --- API KEYS ---
 COMIC_VINE_KEY = os.environ.get("COMIC_VINE_KEY")
@@ -149,7 +182,6 @@ def create_audio(text, voice_choice):
     if not text or len(text.strip()) == 0:
         return None
         
-    # Safely strip out all the Markdown symbols (like #, *) and emojis so the TTS doesn't crash
     clean_text = re.sub(r'[^a-zA-Z0-9\s.,!?\'"-]', '', text).strip()[:4000]
     filename = "summary_temp.mp3"
     
@@ -171,31 +203,9 @@ def create_audio(text, voice_choice):
 st.title("📚 Comic Vault Analyzer")
 
 with st.sidebar:
-    st.header("🕰️ History")
-    h_series = ""
-    if st.session_state.history:
-        sel_h = st.selectbox("Recent:", ["Select..."] + list(reversed(st.session_state.history)))
-        if sel_h != "Select...":
-            h_series = sel_h.split(" #")[0]
-            st.session_state.issue_num = sel_h.split(" #")[1]
-        st.button("🗑️ Clear", on_click=clear_history, use_container_width=True)
-    
-    st.divider()
-    st.header("Voice Settings")
-    voice_map = {
-        "Christopher (Deep, Cinematic)": "en-US-ChristopherNeural",
-        "Aria (Clear, Professional)": "en-US-AriaNeural",
-        "Guy (Casual, Conversational)": "en-US-GuyNeural",
-        "Jenny (Friendly, Upbeat)": "en-US-JennyNeural",
-        "Steffan (Authoritative, Clear)": "en-US-SteffanNeural",
-        "Ryan (British, Sophisticated)": "en-GB-RyanNeural",
-        "Natasha (Australian, Smooth)": "en-AU-NatashaNeural"
-    }
-    sel_voice_label = st.selectbox("Narrator", options=list(voice_map.keys()))
-    
-    st.divider()
-    st.header("Search")
-    query = st.text_input("Series", value=h_series)
+    # 1. SEARCH AT THE TOP
+    st.header("🔍 Search")
+    query = st.text_input("Series", key="search_query")
     if query:
         vols = fetch_volumes(query)
         if vols:
@@ -210,11 +220,39 @@ with st.sidebar:
             
             trigger = st.button("Analyze", use_container_width=True) or st.session_state.auto_analyze
         else: st.warning("Not found.")
+    else:
+        trigger = False
 
-# --- DISPLAY ---
+    st.divider()
+    
+    # 2. VOICE SETTINGS IN THE MIDDLE
+    st.header("Voice Settings")
+    voice_map = {
+        "Christopher (Deep, Cinematic)": "en-US-ChristopherNeural",
+        "Aria (Clear, Professional)": "en-US-AriaNeural",
+        "Guy (Casual, Conversational)": "en-US-GuyNeural",
+        "Jenny (Friendly, Upbeat)": "en-US-JennyNeural",
+        "Steffan (Authoritative, Clear)": "en-US-SteffanNeural",
+        "Ryan (British, Sophisticated)": "en-GB-RyanNeural",
+        "Natasha (Australian, Smooth)": "en-AU-NatashaNeural"
+    }
+    sel_voice_label = st.selectbox("Narrator", options=list(voice_map.keys()))
+    
+    st.divider()
+
+    # 3. HISTORY AT THE BOTTOM
+    st.header("🕰️ History")
+    if st.session_state.history:
+        st.selectbox("Recent:", ["Select..."] + list(reversed(st.session_state.history)), key="history_selector", on_change=load_from_history)
+        st.button("🗑️ Clear", on_click=clear_history, use_container_width=True)
+    else:
+        st.caption("No recent history.")
+
+# --- STEP 1: FETCH DATA & GENERATE TEXT ONLY ---
 if query and 'vid' in locals() and trigger:
     st.session_state.auto_analyze = False
-    with st.spinner("Analyzing & Generating Audio..."):
+    
+    with st.spinner("Analyzing comic archives..."):
         data = get_issue_data(vid, st.session_state.issue_num)
         if data:
             summary = generate_ai_summary(data, sel_vol, st.session_state.issue_num)
@@ -222,23 +260,20 @@ if query and 'vid' in locals() and trigger:
             st.session_state.current_img = data.get('image', {}).get('medium_url')
             st.session_state.current_title = f"{sel_vol} #{st.session_state.issue_num}"
             
+            # Save history persistently
             if st.session_state.current_title not in st.session_state.history:
                 st.session_state.history.append(st.session_state.current_title)
+                save_history(st.session_state.history)
             
+            st.session_state.audio_bytes = None
+            st.session_state.b64_audio = None
             if summary:
-                selected_voice_code = voice_map[sel_voice_label]
-                audio_bytes = create_audio(summary, selected_voice_code)
-                st.session_state.audio_bytes = audio_bytes
-                if audio_bytes:
-                    st.session_state.b64_audio = base64.b64encode(audio_bytes).decode()
-                else:
-                    st.session_state.b64_audio = None
-            else:
-                st.session_state.audio_bytes = None
-                st.session_state.b64_audio = None
+                st.session_state.needs_audio = True
         else:
             st.error("Issue not found.")
+            st.session_state.current_summary = None
 
+# --- STEP 2: DISPLAY TEXT IMMEDIATELY ---
 if st.session_state.current_summary:
     col_a, col_b = st.columns([1, 2])
     with col_a:
@@ -249,11 +284,25 @@ if st.session_state.current_summary:
         with st.container(border=True): 
             st.markdown(st.session_state.current_summary)
         
-        # Custom Realtime Audio Player UI
         st.divider()
         st.caption("🎧 **Listen to the Deep Dive**")
         
-        if st.session_state.b64_audio:
+        # --- STEP 3: GENERATE AUDIO IN THE BACKGROUND ---
+        if st.session_state.needs_audio:
+            with st.spinner("🎙️ Recording narrator voice..."):
+                selected_voice_code = voice_map[sel_voice_label]
+                audio_bytes = create_audio(st.session_state.current_summary, selected_voice_code)
+                st.session_state.audio_bytes = audio_bytes
+                
+                if audio_bytes:
+                    st.session_state.b64_audio = base64.b64encode(audio_bytes).decode()
+                
+                st.session_state.needs_audio = False
+            
+            st.rerun()
+
+        # --- STEP 4: DISPLAY THE PLAYER ---
+        elif st.session_state.b64_audio:
             current_theme = {
                 'player': '#1a1c24',
                 'accent': '#00d4ff',
@@ -283,7 +332,6 @@ if st.session_state.current_summary:
             """
             components.html(realtime_player_html, height=120)
             
-            # Download Button
             safe_title = "".join([c for c in st.session_state.current_title if c.isalpha() or c.isdigit() or c==' ']).rstrip()
             st.download_button(
                 label="💾 Download Audio File",
