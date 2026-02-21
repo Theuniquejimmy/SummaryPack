@@ -8,7 +8,7 @@ import markdown
 import asyncio
 import edge_tts
 import base64
-from bs4 import BeautifulSoup # Ensure beautifulsoup4 is in requirements.txt
+from bs4 import BeautifulSoup
 from ebooklib import epub
 from google import genai
 from groq import Groq
@@ -92,7 +92,6 @@ if query:
     resp = requests.get(url).json()
     
     if resp:
-        # FIXED: Added a safety check for 'premiered' to avoid slicing None
         show_options = {}
         for item in resp:
             s = item.get('show', {})
@@ -106,44 +105,42 @@ if query:
         clean_title = selected_show.split(" (")[0]
         
         c1, c2 = st.columns(2)
-        s_val = c1.number_input("Season", min_value=1, value=1)
-        ep_val = c2.number_input("Episode", min_value=1, value=1) if app_mode == "Single Episode" else 1
+        s_val_input = c1.number_input("Season", min_value=1, value=1)
+        ep_val_input = c2.number_input("Episode", min_value=1, value=1) if app_mode == "Single Episode" else 1
 
         if st.button(f"🚀 Generate {app_mode} Recap", use_container_width=True):
             with st.spinner("Accessing the Vault..."):
                 st.session_state.b64_audio = None
                 
                 if app_mode == "Single Episode":
-                    ep_data = requests.get(f"https://api.tvmaze.com/shows/{show_id}/episodebynumber?season={s_val}&number={ep_val}").json()
+                    ep_data = requests.get(f"https://api.tvmaze.com/shows/{show_id}/episodebynumber?season={s_val_input}&number={ep_val_input}").json()
                     if "id" not in ep_data: 
                         st.error("Episode not found.")
                         st.stop()
                     st.session_state.ep_name = ep_data.get('name')
                     st.session_state.image_url = ep_data.get('image', {}).get('medium')
-                    st.session_state.ep_list = [] # Reset list
+                    st.session_state.ep_list = []
                     summary_context = re.sub('<[^<]+>', '', ep_data.get('summary', ''))
-                    prompt = f"Provide a detailed, witty recap of {clean_title} S{s_val}E{ep_val}. Context: {summary_context}"
+                    prompt = f"Provide a detailed, witty recap of {clean_title} S{s_val_input}E{ep_val_input}. Context: {summary_context}"
                 else:
                     seasons = requests.get(f"https://api.tvmaze.com/shows/{show_id}/seasons").json()
-                    target_s = next((s for s in seasons if s['number'] == s_val), seasons[0])
+                    target_s = next((s for s in seasons if s['number'] == s_val_input), seasons[0])
                     st.session_state.ep_list = requests.get(f"https://api.tvmaze.com/seasons/{target_s['id']}/episodes").json()
-                    st.session_state.ep_name = f"Season {s_val} Complete"
+                    st.session_state.ep_name = f"Season {s_val_input} Complete"
                     st.session_state.image_url = target_s.get('image', {}).get('medium')
                     summary_context = " ".join([re.sub('<[^<]+>', '', e.get('summary','')) for e in st.session_state.ep_list])[:4000]
-                    prompt = f"Provide a deep-dive season recap for {clean_title} Season {s_val}. Context: {summary_context}"
+                    prompt = f"Provide a deep-dive season recap for {clean_title} Season {s_val_input}. Context: {summary_context}"
 
-                # AI Generation (Gemini)
                 try:
                     client = genai.Client(api_key=GEMINI_KEY)
                     res = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
                     st.session_state.lore_text = res.text
                 except Exception:
-                    # Groq Fallback
                     groq_client = Groq(api_key=GROQ_KEY)
                     res = groq_client.chat.completions.create(messages=[{"role":"user","content":prompt}], model="llama-3.3-70b-versatile")
                     st.session_state.lore_text = res.choices[0].message.content
                 
-                st.session_state.s_val, st.session_state.ep_val = s_val, ep_val
+                st.session_state.s_val, st.session_state.ep_val = s_val_input, ep_val_input
 
         # --- THE PRO READER UI ---
         if st.session_state.lore_text:
@@ -170,12 +167,9 @@ if query:
             st.subheader(f"{clean_title} - {st.session_state.ep_name}")
             if st.session_state.image_url: st.image(st.session_state.image_url, use_container_width=True)
             
-            # Reader Content Area
             st.markdown(f'<div class="pro-reader">{markdown.markdown(st.session_state.lore_text)}</div>', unsafe_allow_html=True)
-
             st.write("---")
             
-            # Action Buttons
             col_down, col_audio = st.columns(2)
             
             with col_down:
@@ -185,13 +179,39 @@ if query:
             with col_audio:
                 if st.button("🔊 Generate Audio Narration", use_container_width=True):
                     with st.spinner("Synthesizing..."):
-                        # Uses BS4 to clean markdown/html for the narrator
                         clean_tts_text = BeautifulSoup(st.session_state.lore_text, "html.parser").get_text(separator=' ')
                         create_audio(clean_tts_text, voice_setting)
                         with open("lore.mp3", "rb") as f:
                             st.session_state.b64_audio = base64.b64encode(f.read()).decode()
 
             if st.session_state.b64_audio:
-                realtime_player_html = f"""
-                <div style="background-color: {current_theme['player']}; padding: 15px; border-radius: 10px; border-left: 4px solid {current_theme['accent']}; color: {current_theme['text']};">
-                    <audio id="narrator-audio" controls autoplay style="width: 100%;"><source src="data:audio/mp3
+                # Using a standard string with .replace() to avoid f-string curly brace issues
+                player_html = """
+                <div style="background-color: PLAYER_BG; padding: 15px; border-radius: 10px; border-left: 4px solid ACCENT_COLOR; color: TEXT_COLOR;">
+                    <audio id="narrator-audio" controls autoplay style="width: 100%;"><source src="data:audio/mp3;base64,AUDIO_DATA" type="audio/mp3"></audio>
+                    <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 12px; font-family: sans-serif;">
+                        <label>🏃 Speed: <span id="speed-display">1.0x</span></label>
+                        <input type="range" id="speed-slider" min="0.5" max="2.0" step="0.1" value="1.0" style="width: 50%;">
+                    </div>
+                </div>
+                <script>
+                    const audio = document.getElementById("narrator-audio");
+                    const slider = document.getElementById("speed-slider");
+                    const display = document.getElementById("speed-display");
+                    slider.oninput = function() { 
+                        audio.playbackRate = this.value; 
+                        display.textContent = this.value + "x"; 
+                    };
+                </script>
+                """
+                player_html = player_html.replace("PLAYER_BG", current_theme['player'])
+                player_html = player_html.replace("ACCENT_COLOR", current_theme['accent'])
+                player_html = player_html.replace("TEXT_COLOR", current_theme['text'])
+                player_html = player_html.replace("AUDIO_DATA", st.session_state.b64_audio)
+                
+                components.html(player_html, height=130)
+
+    else:
+        st.warning("No shows found.")
+else:
+    st.info("Search for a show to begin your journey.")
