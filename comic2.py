@@ -5,7 +5,7 @@ import re
 import asyncio
 import edge_tts
 from google import genai
-from groq import Groq
+from openai import OpenAI  # Swapped Groq for OpenAI
 
 # --- CONFIGURATION & STYLING ---
 st.set_page_config(page_title="Comic Vault Analyzer", layout="wide")
@@ -57,14 +57,19 @@ def clear_history():
 # --- API KEYS ---
 COMIC_VINE_KEY = os.environ.get("COMIC_VINE_KEY")
 GEMINI_KEY = os.environ.get("GEMINI_KEY")
-GROQ_KEY = os.environ.get("GROQ_KEY")
+NVIDIA_API_KEY = os.environ.get("NVIDIA_API_KEY") # New NVIDIA Key
 
 if not COMIC_VINE_KEY or not GEMINI_KEY:
     st.error("Missing API Keys! Please check your environment variables.")
     st.stop()
 
 ai_client = genai.Client(api_key=GEMINI_KEY)
-groq_client = Groq(api_key=GROQ_KEY) if GROQ_KEY else None
+
+# Initialize the NVIDIA client using the OpenAI library
+nvidia_client = OpenAI(
+  base_url="https://integrate.api.nvidia.com/v1",
+  api_key=NVIDIA_API_KEY
+) if NVIDIA_API_KEY else None
 
 # --- HELPERS ---
 @st.cache_data
@@ -105,54 +110,40 @@ def generate_ai_summary(issue_data, series_name, issue_num):
     """
     
     try:
+        # Try Gemini First
         resp = ai_client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
         return resp.text
     except Exception as e:
-        if groq_client:
-            st.caption("ℹ️ *Using Groq Backup*")
-            comp = groq_client.chat.completions.create(
-                model="llama-3.3-70b-versatile", 
+        # Fallback to NVIDIA
+        if nvidia_client:
+            st.caption("ℹ️ *Using NVIDIA Backup*")
+            comp = nvidia_client.chat.completions.create(
+                model="meta/llama-3.1-70b-instruct", 
                 messages=[{"role": "user", "content": prompt}]
             )
             return comp.choices[0].message.content
         return "AI Error"
 
-# --- IMPROVED EDGE TTS FUNCTION ---
+# --- EDGE TTS FUNCTION ---
 async def generate_edge_audio(text, voice, speed):
     if not text or len(text.strip()) == 0:
         return None
+        
+    pct = int((speed - 1) * 100)
+    speed_str = f"{'+' if pct >= 0 else ''}{pct}%"
     
-    # 1. HEAVY SANITIZATION: Strip out characters that break Microsoft's SSML
-    # Remove markdown asterisks, hashes, underscores, and backticks
-    clean = re.sub(r'[*#_~`]', '', text)
-    # Replace ampersands and angle brackets which crash the XML parser
-    clean = clean.replace("&", "and").replace("<", "").replace(">", "")
-    clean = clean.strip()
-    
-    if not clean:
-        return None
-
-    # 2. FOOLPROOF SPEED FORMATTING
     try:
-        if speed == 1.0:
-            communicate = edge_tts.Communicate(clean, voice)
-        else:
-            # Round the percentage to prevent weird floating point decimals
-            pct = int(round((speed - 1.0) * 100))
-            speed_str = f"+{pct}%" if pct > 0 else f"{pct}%"
-            communicate = edge_tts.Communicate(clean, voice, rate=speed_str)
-            
+        communicate = edge_tts.Communicate(text, voice, rate=speed_str)
         audio_data = b""
         async for chunk in communicate.stream():
             if chunk["type"] == "audio":
                 audio_data += chunk["data"]
         
         return audio_data if audio_data else None
-        
     except Exception as e:
-        st.error(f"Network/TTS Error Details: {e}")
+        print(f"TTS Error: {e}")
         return None
-        
+
 # --- UI ---
 st.title("📚 Comic Vault Analyzer")
 
@@ -236,5 +227,3 @@ if st.session_state.current_summary:
             st.audio(st.session_state.audio_bytes, format='audio/mp3')
         else:
             st.warning("⚠️ Audio could not be generated for this summary.")
-
-
