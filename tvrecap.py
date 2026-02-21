@@ -7,6 +7,7 @@ import base64
 import edge_tts
 import asyncio
 from ebooklib import epub
+import io
 import os
 import re
 import markdown
@@ -14,7 +15,7 @@ import markdown
 # --- CONFIGURATION ---
 st.set_page_config(page_title="TV Vault Reader", page_icon="📖", layout="centered")
 
-# Expanded Aliases for better accuracy
+# Expanded and verified Aliases
 WIKI_ALIASES = {
     "Buffy the Vampire Slayer": "buffy",
     "Invincible": "amazon-invincible",
@@ -46,33 +47,31 @@ def create_audio(text, voice_choice):
     asyncio.set_event_loop(loop)
     loop.run_until_complete(generate_neural_audio(text, selected_voice))
 
-# --- TIER 1: IMPROVED FANDOM SCRAPER ---
+# --- TIER 1: ENHANCED FANDOM SCRAPER ---
 def get_raw_lore(wiki_slug, ep_title):
     api_url = f"https://{wiki_slug.lower()}.fandom.com/api.php"
+    # We search specifically for the episode title
     search_params = {"action": "query", "list": "search", "srsearch": ep_title, "format": "json"}
-    headers = {'User-Agent': 'TVVaultPro/1.0'}
+    headers = {'User-Agent': 'TVVaultPro/1.1'}
     
     try:
         search_res = requests.get(api_url, params=search_params, headers=headers, timeout=10).json()
         search_results = search_res.get("query", {}).get("search", [])
         if not search_results: return None, None
             
+        # Strategy: Look for the most likely "TV Episode" page
         exact_title = search_results[0]["title"]
         e_lower = ep_title.lower()
-        
-        # BUFFY FIX: Look for common TV tags like (episode) or (TV episode)
-        priority_tags = ["(episode)", "(tv episode)", "(tv series)", "(series)"]
+        priority_tags = ["(episode)", "(tv episode)", "(series)", "(tv series)"]
         
         found_page = False
         for res in search_results:
             t_lower = res["title"].lower()
-            # If the title contains a TV tag, it's almost certainly the one we want
-            if any(tag in t_lower for tag in priority_tags):
+            if any(tag in t_lower for tag in priority_tags) and e_lower in t_lower:
                 exact_title = res["title"]
                 found_page = True
                 break
         
-        # Fallback: Check for an exact title match (without tags)
         if not found_page:
             for res in search_results:
                 if res["title"].lower() == e_lower:
@@ -89,21 +88,23 @@ def get_raw_lore(wiki_slug, ep_title):
             
         soup = BeautifulSoup(html_text, 'html.parser')
         
-        # Clean up the wiki junk (edit buttons, etc)
-        for junk in soup.find_all(['span', 'table', 'aside']):
-            if 'mw-editsection' in junk.get('class', []) or junk.name in ['table', 'aside']:
-                junk.decompose()
+        # Decompose non-story elements
+        for junk in soup.find_all(['table', 'aside', 'div'], class_=['portable-infobox', 'navbox']):
+            junk.decompose()
         
         content = []
         in_story = False
-        story_keys = ['plot', 'synopsis', 'summary']
+        # Stop words to prevent bleeding into Trivia/Gallery sections
+        stop_sections = ['trivia', 'gallery', 'references', 'credits', 'music', 'videos', 'cast']
         
         for tag in soup.find_all(['h2', 'h3', 'p']):
             text = tag.get_text().lower()
-            if any(key in text for key in story_keys):
+            # Start collecting when we hit Plot/Synopsis
+            if any(key in text for key in ['plot', 'synopsis', 'summary']):
                 in_story = True
                 continue
-            if in_story and tag.name == 'h2': # Stop at the next major section (Trivia, Cast, etc)
+            # Stop collecting at the next major H2 section
+            if in_story and tag.name == 'h2' and any(s in text for s in stop_sections):
                 break
             if in_story and tag.name == 'p' and len(tag.get_text().strip()) > 20:
                 content.append(str(tag))
@@ -114,7 +115,6 @@ def get_raw_lore(wiki_slug, ep_title):
 # --- TIER 2: WIKIPEDIA FALLBACK ---
 def get_wikipedia_lore(show_name, season_num, ep_title):
     api_url = "https://en.wikipedia.org/w/api.php"
-    # Try searching the specific season page or the episode list
     queries = [f"List of {show_name} episodes", f"{show_name} (season {season_num})"]
     
     for q in queries:
@@ -134,13 +134,17 @@ def get_wikipedia_lore(show_name, season_num, ep_title):
     return None, None
 
 def fetch_best_lore(show_name, season_num, ep_title, wiki_slug, tvmaze_summary, tvmaze_url):
-    # Fandom (Lore Heavy) -> Wikipedia (Fact Heavy) -> TVMaze (Backup)
+    # Tier 1: Fandom
     text, url = get_raw_lore(wiki_slug, ep_title)
-    if text and len(text) > 400: return text, url, "Fandom"
+    if text and len(BeautifulSoup(text, "html.parser").get_text()) > 350:
+        return text, url, "Fandom"
     
+    # Tier 2: Wikipedia
     text, url = get_wikipedia_lore(show_name, season_num, ep_title)
-    if text and len(text) > 200: return text, url, "Wikipedia"
+    if text and len(BeautifulSoup(text, "html.parser").get_text()) > 150:
+        return text, url, "Wikipedia"
     
+    # Tier 3: TVMaze
     return tvmaze_summary, tvmaze_url, "TVMaze"
 
 # --- EPUB COMPILER ---
@@ -173,27 +177,26 @@ def build_season_epub(show_id, show_name, season_num, wiki_slug):
     progress_bar.empty()
     return mem_file.getvalue()
 
-# --- STATE INITIALIZATION ---
-for key in ['s_val', 'ep_val', 'lore_text', 'b64_audio', 'epub_ready', 'auto_fetch']:
+# --- STATE ---
+for key in ['s_val', 'ep_val', 'lore_text', 'b64_audio', 'epub_ready', 'auto_fetch', 'source', 'wiki_url', 'ep_name', 'image_url']:
     if key not in st.session_state:
         st.session_state[key] = 1 if 'val' in key else (False if key == 'auto_fetch' else None)
 
-def load_next_episode():
+def load_next():
     st.session_state.ep_val += 1
     st.session_state.auto_fetch = True
     st.session_state.lore_text = None
-    st.session_state.b64_audio = None
 
-# --- UI LOGIC ---
+# --- UI ---
 st.title("📖 TV Vault Reader")
 
-query = st.text_input("Search for a show:", placeholder="e.g. Buffy")
+query = st.text_input("Search for a show:", placeholder="e.g. Invincible")
 
 if query:
     try:
         resp = requests.get(f"https://api.tvmaze.com/search/shows?q={query}").json()
         if resp:
-            # THE NUCLEAR FIX FOR DATES
+            # Bulletproof date loop
             show_options = {}
             for item in resp:
                 s = item.get('show', {})
@@ -204,25 +207,24 @@ if query:
             
             label = st.selectbox("Select Result:", options=list(show_options.keys()))
             show_data = show_options[label]
-            # Match the show name exactly to our aliases
             wiki_slug = WIKI_ALIASES.get(show_data['name'], show_data['name'].replace(" ", "").lower())
             
             c1, c2 = st.columns(2)
             with c1: st.number_input("Season", min_value=1, key="s_val")
             with c2: st.number_input("Episode", min_value=1, key="ep_val")
 
-            if st.button(f"📚 Export Season {st.session_state.s_val} as EPUB", use_container_width=True):
-                epub_data = build_season_epub(show_data['id'], show_data['name'], st.session_state.s_val, wiki_slug)
-                if epub_data:
-                    st.session_state.epub_ready = epub_data
-                    st.success("Season Compiled!")
+            if st.button("📚 Compile Season EPUB", use_container_width=True):
+                data = build_season_epub(show_data['id'], show_data['name'], st.session_state.s_val, wiki_slug)
+                if data:
+                    st.session_state.epub_ready = data
+                    st.success("Vault Compiled!")
             
             if st.session_state.epub_ready:
-                st.download_button("⬇️ Download Your EPUB", data=st.session_state.epub_ready, file_name=f"{show_data['name']}_Lore.epub", mime="application/epub+zip", use_container_width=True)
+                st.download_button("⬇️ Download EPUB", data=st.session_state.epub_ready, file_name=f"{show_data['name']}_Lore.epub", mime="application/epub+zip", use_container_width=True)
 
             st.divider()
 
-            if st.button("🔓 Read Single Episode", use_container_width=True) or st.session_state.auto_fetch:
+            if st.button("🔓 Extract Episode Lore", use_container_width=True) or st.session_state.auto_fetch:
                 st.session_state.auto_fetch = False
                 api_res = requests.get(f"https://api.tvmaze.com/shows/{show_data['id']}/episodebynumber?season={st.session_state.s_val}&number={st.session_state.ep_val}").json()
                 
@@ -235,23 +237,21 @@ if query:
                     st.session_state.image_url = api_res.get('image', {}).get('original')
                     st.session_state.b64_audio = None
 
-            # --- PRO READER UI ---
             if st.session_state.lore_text:
                 with st.expander("⚙️ Reader Settings"):
                     theme = st.selectbox("Theme", ["Dark", "Sepia", "Light"])
                     voice = st.selectbox("Narrator", ["Christopher (Deep, Cinematic)", "Aria (Clear, Professional)", "Guy (Casual, Conversational)"])
                 
-                themes = {"Dark": {"bg": "#121212", "text": "#e0e0e0", "acc": "#3b82f6", "pl": "#1e1e1e"}, "Sepia": {"bg": "#f4ecd8", "text": "#433422", "acc": "#8b5a2b", "pl": "#e8dfc8"}, "Light": {"bg": "#ffffff", "text": "#333333", "acc": "#2563eb", "pl": "#f3f4f6"}}
-                t = themes[theme]
+                t = {"Dark": {"bg": "#121212", "text": "#e0e0e0", "acc": "#3b82f6", "pl": "#1e1e1e"}, "Sepia": {"bg": "#f4ecd8", "text": "#433422", "acc": "#8b5a2b", "pl": "#e8dfc8"}, "Light": {"bg": "#ffffff", "text": "#333333", "acc": "#2563eb", "pl": "#f3f4f6"}}[theme]
 
                 st.markdown(f"""<style>.pro-reader {{ background-color: {t['bg']}; color: {t['text']}; padding: 30px; border-radius: 12px; border: 1px solid {t['acc']}44; font-family: 'Georgia', serif; line-height: 1.8; }} .pro-reader h2 {{ color: {t['acc']}; }}</style>""", unsafe_allow_html=True)
                 
                 st.subheader(f"S{st.session_state.s_val}E{st.session_state.ep_val}: {st.session_state.ep_name}")
                 if st.session_state.image_url: st.image(st.session_state.image_url, use_container_width=True)
                 
-                if st.button("🔊 Play Audio Narration", use_container_width=True):
-                    clean_text = BeautifulSoup(st.session_state.lore_text, "html.parser").get_text(separator=' ')
-                    create_audio(clean_text, voice)
+                if st.button("🔊 Narrate Lore"):
+                    txt = BeautifulSoup(st.session_state.lore_text, "html.parser").get_text(separator=' ')
+                    create_audio(txt, voice)
                     with open("lore.mp3", "rb") as f:
                         st.session_state.b64_audio = base64.b64encode(f.read()).decode()
 
@@ -260,8 +260,6 @@ if query:
 
                 st.markdown(f'<div class="pro-reader">{st.session_state.lore_text}</div>', unsafe_allow_html=True)
                 st.caption(f"Source: {st.session_state.source} | [View Original]({st.session_state.wiki_url})")
-                st.divider()
-                st.button(f"⏭️ Next: S{st.session_state.s_val}E{st.session_state.ep_val+1}", on_click=load_next_episode, use_container_width=True)
+                st.button(f"⏭️ Next Episode", on_click=load_next, use_container_width=True)
 
-    except Exception as e: st.error(f"Vault Error: {e}")
-else: st.info("Search for a show to begin your journey.")
+    except Exception as e: st.error(f"Error: {e}")
