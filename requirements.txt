@@ -1,11 +1,9 @@
+streamlit
 requests
-beautifulsoup4
-edge-tts
-asyncio
-EbookLib
-openai
 google-genai
 groq
-streamlit
-gTTS
+edge-tts
+EbookLib
 markdown
+beautifulsoup4
+
