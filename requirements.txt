@@ -7,3 +7,4 @@ EbookLib
 markdown
 beautifulsoup4
 lxml
+openai
