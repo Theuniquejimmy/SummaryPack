@@ -169,18 +169,19 @@ def generate_ai_summary(issue_data, series_name, issue_num, alt_name=""):
         
     prompt += "\nFormat with these Markdown headings: Context, Detailed Plot, Key Moments, Legacy."
     
-    # 3. Model Hierarchy (Starting with the strongest)
-    models_to_try = ["gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro"]
+    # 3. Model Hierarchy (Optimized for Speed)
+    # 2.5 Flash is the "Goldilocks" model: Faster than Pro, smarter than 2.0.
+    models_to_try = ["gemini-2.5-flash", "gemini-3-flash-preview", "gemini-3.1-pro-preview"]
     
     for model_name in models_to_try:
-        wait_time = 12 
-        for attempt in range(3):
+        # Reduced initial wait time for a snappier feel
+        wait_time = 5 
+        for attempt in range(2): # Reduced from 3 to 2 attempts per model to fail-over faster
             try:
                 from google.genai import types
-                # Grounding configuration
                 config = types.GenerateContentConfig(
                     tools=[types.Tool(google_search=types.GoogleSearch())] if needs_search else None,
-                    temperature=1.0 # Recommended for best search grounding results
+                    temperature=0.7 # Lowered slightly for faster, more focused output
                 )
                 
                 resp = ai_client.models.generate_content(model=model_name, contents=prompt, config=config)
@@ -188,14 +189,13 @@ def generate_ai_summary(issue_data, series_name, issue_num, alt_name=""):
                 
             except Exception as e:
                 err = str(e).upper()
-                if "429" in err or "RESOURCE_EXHAUSTED" in err or "500" in err:
-                    # Apply Jitter to avoid synchronized retry blocks
-                    sleep_gap = wait_time + random.uniform(1, 4)
-                    st.toast(f"⏳ {model_name} busy. Retrying in {int(sleep_gap)}s...")
+                if "429" in err or "RESOURCE_EXHAUSTED" in err:
+                    sleep_gap = wait_time + random.uniform(0.5, 2.0)
+                    st.toast(f"⚡ {model_name} rate limited. Trying next model...")
                     time.sleep(sleep_gap)
-                    wait_time *= 2  
+                    break # Immediately jump to the next model in the list instead of retrying the same one
                 else:
-                    break # Critical failure (Auth/Format), move to next model
+                    break
                     
     # 4. Final Failover
     if nvidia_client:
@@ -278,5 +278,6 @@ if st.session_state.current_summary:
         st.divider()
         epub_bytes = create_epub(st.session_state.current_title, st.session_state.current_summary)
         st.download_button(label="📖 Download EPUB", data=epub_bytes, file_name=f"{st.session_state.current_title}.epub", mime="application/epub+zip", use_container_width=True)
+
 
 
