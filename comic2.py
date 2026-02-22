@@ -133,11 +133,12 @@ def get_issue_data(volume_id, issue_num):
         return res.get('results', [])[0] if res.get('results') else None
     except Exception: return None
 
-# --- THE ALL-IN-ONE GEMINI HISTORIAN (ULTRA-RELIABLE VERSION) ---
+# --- THE ALL-IN-ONE GEMINI HISTORIAN (3.1 ELITE VERSION) ---
 @st.cache_data(show_spinner=False)
 def generate_ai_summary(issue_data, series_name, issue_num, alt_name=""):
-    import random # Added for jitter
+    import random 
     
+    # 1. Prepare Data
     chars = ", ".join([c['name'] for c in (issue_data.get('character_credits') or [])])
     creators = ", ".join([p['name'] for p in (issue_data.get('person_credits') or [])])
     plot = str(issue_data.get('deck') or issue_data.get('description') or "")[:5000]
@@ -146,50 +147,59 @@ def generate_ai_summary(issue_data, series_name, issue_num, alt_name=""):
     base_title = series_name.split(' (')[0]
     search_target = f"{base_title} {alt_name} issue {issue_num}" if alt_name else f"{series_name} issue {issue_num}"
     
-    prompt = f"You are an expert comic book historian. Write a detailed, 500+ word deep-dive summary into {series_name} #{issue_num}."
+    # 2. Advanced Reasoning Prompt
+    prompt = f"""
+    You are an elite comic book historian using advanced reasoning. 
+    Write a 500-800 word deep-dive into {series_name} #{issue_num}.
+    
+    CONTEXTUAL DATA:
+    - Target: {series_name} Issue #{issue_num}
+    - Creators: {creators}
+    - Characters: {chars}
+    """
     
     if needs_search:
         prompt += f"""
-        CRITICAL: Local database is empty. ACTIVELY GOOGLE SEARCH the plot for: "{search_target}".
-        TIPS: Cross-reference with creators: {creators}. Search by Volume if needed.
-        Do not apologize. ONLY summarize issue #{issue_num}.
+        CRITICAL: The local database is empty. USE YOUR GOOGLE SEARCH TOOL to find the exact plot for: "{search_target}".
+        SNIPER FILTERING RULE: Wiki results often contain summaries for entire arcs. You MUST verify that the events you summarize occur specifically in issue #{issue_num}. 
+        If the search results are for the wrong issue, do not summarize them; state that the specific issue data is missing.
         """
     else:
-        prompt += f"\nUse this plot: {plot}"
+        prompt += f"\nSOURCE PLOT: {plot}"
         
-    prompt += f"\nCharacters involved: {chars}\nFormat with headings: Context, Detailed Plot, Key Moments, Significance."
+    prompt += "\nFormat with these Markdown headings: Context, Detailed Plot, Key Moments, Legacy."
     
-    # Try two different models to bypass local congestion
-    models_to_try = ["gemini-2.0-flash", "gemini-2.0-flash-lite"]
+    # 3. Model Hierarchy (Starting with the strongest)
+    models_to_try = ["gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro"]
     
     for model_name in models_to_try:
         wait_time = 12 
         for attempt in range(3):
             try:
                 from google.genai import types
+                # Grounding configuration
                 config = types.GenerateContentConfig(
-                    tools=[types.Tool(google_search=types.GoogleSearch())] if needs_search else None
+                    tools=[types.Tool(google_search=types.GoogleSearch())] if needs_search else None,
+                    temperature=1.0 # Recommended for best search grounding results
                 )
+                
                 resp = ai_client.models.generate_content(model=model_name, contents=prompt, config=config)
                 return resp.text
+                
             except Exception as e:
-                error_str = str(e).upper()
-                # Check for rate limit (429) or backend overload (500/503)
-                if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str or "500" in error_str:
-                    # Added 'Jitter' (random extra wait) to bypass synchronized blocks
-                    jitter = random.uniform(1, 4)
-                    sleep_duration = wait_time + jitter
-                    st.toast(f"⏳ {model_name} busy. Cooling down {int(sleep_duration)}s...")
-                    time.sleep(sleep_duration)
+                err = str(e).upper()
+                if "429" in err or "RESOURCE_EXHAUSTED" in err or "500" in err:
+                    # Apply Jitter to avoid synchronized retry blocks
+                    sleep_gap = wait_time + random.uniform(1, 4)
+                    st.toast(f"⏳ {model_name} busy. Retrying in {int(sleep_gap)}s...")
+                    time.sleep(sleep_gap)
                     wait_time *= 2  
                 else:
-                    # If it's a different error (like a bad API key), stop immediately
-                    st.error(f"API Error: {e}")
-                    break 
-    
-    # Final Fallback to NVIDIA if both Gemini models fail
+                    break # Critical failure (Auth/Format), move to next model
+                    
+    # 4. Final Failover
     if nvidia_client:
-        st.caption("ℹ️ *Gemini exhausted. Using NVIDIA Backup...*")
+        st.caption("ℹ️ *Gemini models exhausted. Using NVIDIA Backup...*")
         try:
             comp = nvidia_client.chat.completions.create(
                 model="meta/llama-3.1-70b-instruct", 
@@ -198,41 +208,7 @@ def generate_ai_summary(issue_data, series_name, issue_num, alt_name=""):
             return comp.choices[0].message.content
         except Exception: pass
              
-    return "AI Error: The servers are currently overloaded. Please wait 1 minute and try again."
-
-def create_epub(title, content):
-    book = epub.EpubBook()
-    book.set_identifier(title.replace(" ", "_").replace("#", ""))
-    book.set_title(title)
-    book.set_language('en')
-    book.add_author("Comic Vault Analyzer")
-    c1 = epub.EpubHtml(title=title, file_name='chap_01.xhtml', lang='en')
-    html_body = markdown.markdown(content)
-    c1.content = f'<h2>{title}</h2>{html_body}'
-    book.add_item(c1)
-    book.toc = (epub.Link('chap_01.xhtml', title, title),)
-    book.add_item(epub.EpubNcx()); book.add_item(epub.EpubNav())
-    book.spine = ['nav', c1]
-    out_stream = io.BytesIO()
-    epub.write_epub(out_stream, book)
-    return out_stream.getvalue()
-
-async def generate_neural_audio(text, voice, filename="summary_temp.mp3"):
-    communicate = edge_tts.Communicate(text, voice)
-    await communicate.save(filename)
-
-def create_audio(text, voice_choice):
-    if not text or len(text.strip()) == 0: return None
-    clean_text = re.sub(r'[^a-zA-Z0-9\s.,!?\'"-]', '', text).strip()[:4000]
-    filename = "summary_temp.mp3"
-    try:
-        loop = asyncio.new_event_loop(); asyncio.set_event_loop(loop)
-        loop.run_until_complete(generate_neural_audio(clean_text, voice_choice, filename))
-        with open(filename, "rb") as f: audio_data = f.read()
-        os.remove(filename)
-        return audio_data
-    except Exception: return None
-
+    return "AI Error: The frontier models are currently over capacity. Please wait 60 seconds."
 # --- UI ---
 st.title("📚 Comic Vault Analyzer")
 
@@ -302,4 +278,5 @@ if st.session_state.current_summary:
         st.divider()
         epub_bytes = create_epub(st.session_state.current_title, st.session_state.current_summary)
         st.download_button(label="📖 Download EPUB", data=epub_bytes, file_name=f"{st.session_state.current_title}.epub", mime="application/epub+zip", use_container_width=True)
+
 
