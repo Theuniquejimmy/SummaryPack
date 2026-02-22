@@ -140,7 +140,7 @@ def create_audio(text, voice_choice):
         return loop.run_until_complete(generate_neural_audio(clean, voice_choice))
     except: return None
 
-# --- 4. SESSION STATE (The Pre-Flight Fix) ---
+# --- 4. SESSION STATE ---
 if "history" not in st.session_state: st.session_state.history = []
 if "issue_num" not in st.session_state: st.session_state.issue_num = "1"
 if "current_summary" not in st.session_state: st.session_state.current_summary = None
@@ -197,10 +197,27 @@ with st.sidebar:
         st.download_button("🗜️ Download ZIP", buf.getvalue(), "batch.zip", "application/zip", use_container_width=True)
 
     st.divider()
-    voice_map = {"Christopher (Deep)": "en-US-ChristopherNeural", "Ryan (British)": "en-GB-RyanNeural"}
-    sel_voice = st.selectbox("Narrator", options=list(voice_map.keys()))
+    
+    # --- EXPANDED VOICE ROSTER ---
+    st.header("🎙️ Narrator Settings")
+    voice_map = {
+        "Christopher (Deep US Male)": "en-US-ChristopherNeural", 
+        "Aria (Clear US Female)": "en-US-AriaNeural",
+        "Guy (Energetic US Male)": "en-US-GuyNeural",
+        "Jenny (Standard US Female)": "en-US-JennyNeural",
+        "Steffan (Pro US Male)": "en-US-SteffanNeural",
+        "Ryan (British Male)": "en-GB-RyanNeural",
+        "Sonia (British Female)": "en-GB-SoniaNeural",
+        "Natasha (Australian Female)": "en-AU-NatashaNeural",
+        "William (Australian Male)": "en-AU-WilliamNeural"
+    }
+    sel_voice = st.selectbox("Select Voice", options=list(voice_map.keys()))
 
 # --- 6. MAIN EXECUTION ---
+
+# --- MAIN PAGE TITLE ---
+st.title("🦸‍♂️ Comic Book Recap")
+
 tab1, tab2 = st.tabs(["📖 Summary & Audio", "💬 Interrogator Chat"])
 
 if query and trigger:
