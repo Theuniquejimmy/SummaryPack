@@ -27,16 +27,6 @@ st.markdown("""
     div[data-testid="column"] button { padding-top: 10px; padding-bottom: 10px; }
     </style>
     """, unsafe_allow_html=True)
-<style>
-    /* ... your existing styles ... */
-    .audio-container {
-        background: #1a1c24;
-        padding: 20px;
-        border-radius: 10px;
-        border-left: 5px solid #00d4ff;
-        margin: 10px 0;
-    }
-</style>
 
 # --- 2. API KEYS ---
 COMIC_VINE_KEY = os.environ.get("COMIC_VINE_KEY")
@@ -87,34 +77,31 @@ def get_issue_data(volume_id, issue_num):
 @st.cache_data(show_spinner=False)
 def generate_ai_summary(issue_data, series_name, issue_num, alt_name=""):
     chars = ", ".join([c['name'] for c in (issue_data.get('character_credits') or [])])
-    creators = ", ".join([p['name'] for p in (issue_data.get('person_credits') or [])])
     plot = str(issue_data.get('deck') or issue_data.get('description') or "")[:5000]
     needs_search = len(plot.strip()) < 50
     base_title = series_name.split(' (')[0]
     search_target = f"{base_title} {alt_name} issue {issue_num}" if alt_name else f"{series_name} issue {issue_num}"
     
-    prompt = f"You are an expert comic book historian. Write a detailed 500-800 word deep-dive summary into {series_name} #{issue_num}."
+    prompt = f"Expert comic historian. Write 500-800 word deep-dive into {series_name} #{issue_num}."
     if needs_search:
-        prompt += f"\nCRITICAL: Use your GOOGLE SEARCH TOOL to find the plot for: '{search_target}'. Ensure events are specifically for issue #{issue_num}."
+        prompt += f"\nUSE GOOGLE SEARCH for: '{search_target}'. Only summarize issue #{issue_num} specifically."
     else:
-        prompt += f"\nSOURCE PLOT: {plot}"
-    prompt += f"\nCreators: {creators}\nCharacters: {chars}\nFormat with headings: Context, Detailed Plot, Key Moments, Significance."
+        prompt += f"\nPLOT: {plot}"
+    prompt += f"\nCharacters: {chars}\nHeadings: Context, Detailed Plot, Key Moments, Significance."
 
-    models_to_try = ["gemini-2.5-flash", "gemini-3-flash-preview", "gemini-3.1-pro-preview"]
-    for model_name in models_to_try:
-        wait_time = 6
-        for attempt in range(2):
+    models = ["gemini-2.5-flash", "gemini-3.1-pro-preview"]
+    for m in models:
+        wait = 5
+        for att in range(2):
             try:
                 from google.genai import types
-                config = types.GenerateContentConfig(tools=[types.Tool(google_search=types.GoogleSearch())] if needs_search else None)
-                resp = ai_client.models.generate_content(model=model_name, contents=prompt, config=config)
+                cfg = types.GenerateContentConfig(tools=[types.Tool(google_search=types.GoogleSearch())] if needs_search else None)
+                resp = ai_client.models.generate_content(model=m, contents=prompt, config=cfg)
                 return resp.text
-            except Exception as e:
-                if "429" in str(e):
-                    time.sleep(wait_time + random.uniform(1, 3))
-                    wait_time *= 2
-                else: break
-    return "AI Error: Model Timeout."
+            except:
+                time.sleep(wait + random.uniform(1, 2))
+                wait *= 2
+    return "Error generating summary."
 
 def create_epub(title, content, cover_url=None):
     book = epub.EpubBook()
@@ -137,25 +124,19 @@ def create_epub(title, content, cover_url=None):
     return out.getvalue()
 
 async def generate_neural_audio(text, voice):
-    # Fixed TTS logic: returns the audio bytes directly
     communicate = edge_tts.Communicate(text, voice)
     audio_data = b""
     async for chunk in communicate.stream():
-        if chunk["type"] == "audio":
-            audio_data += chunk["data"]
+        if chunk["type"] == "audio": audio_data += chunk["data"]
     return audio_data
 
 def create_audio(text, voice_choice):
     if not text: return None
-    clean_text = re.sub(r'[^a-zA-Z0-9\s.,!?]', '', text).strip()[:4000]
+    clean = re.sub(r'[^a-zA-Z0-9\s.,!?]', '', text).strip()[:4000]
     try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        data = loop.run_until_complete(generate_neural_audio(clean_text, voice_choice))
-        return data
-    except Exception as e:
-        st.error(f"TTS Error: {e}")
-        return None
+        loop = asyncio.new_event_loop(); asyncio.set_event_loop(loop)
+        return loop.run_until_complete(generate_neural_audio(clean, voice_choice))
+    except: return None
 
 # --- 4. SESSION STATE ---
 if "history" not in st.session_state: st.session_state.history = load_history()
@@ -184,11 +165,11 @@ with st.sidebar:
     
     st.divider()
     st.header("📦 Batch Processor")
-    batch_range = st.text_input("Issue Range (e.g., 1-5)")
-    if st.button("Start Batch run"):
-        if '-' in batch_range and 'vid' in locals():
+    b_range = st.text_input("Range (e.g., 1-5)")
+    if st.button("Start Batch"):
+        if '-' in b_range and 'vid' in locals():
             try:
-                s, e = map(int, batch_range.split('-'))
+                s, e = map(int, b_range.split('-'))
                 prog = st.progress(0); stat = st.empty()
                 if not os.path.exists("exports"): os.makedirs("exports")
                 for i, curr in enumerate(range(s, e + 1)):
@@ -198,23 +179,18 @@ with st.sidebar:
                         b_sum = generate_ai_summary(b_data, sel_vol, str(curr), st.session_state.alt_name)
                         b_epub = create_epub(f"{sel_vol} #{curr}", b_sum, b_data.get('image', {}).get('medium_url'))
                         with open(f"exports/{sel_vol.replace(' ','_')}_{curr}.epub", "wb") as f: f.write(b_epub)
-                    prog.progress((i + 1) / (e - s + 1))
-                    time.sleep(random.uniform(3, 5))
-                st.session_state.batch_done = True
-                stat.success(f"Batch Complete!")
-            except Exception as ex: st.error(f"Batch Error: {ex}")
+                    prog.progress((i + 1) / (e - s + 1)); time.sleep(random.uniform(3, 5))
+                st.session_state.batch_done = True; stat.success("Batch Complete!")
+            except Exception as ex: st.error(f"Error: {ex}")
 
-    # Zip Download Button (Appears only after batch)
     if st.session_state.batch_done:
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w") as z:
-            for f in os.listdir("exports"):
-                z.write(os.path.join("exports", f), f)
-        st.download_button("🗜️ Download All (ZIP)", buf.getvalue(), "comic_vault_batch.zip", "application/zip", use_container_width=True)
+            for f in os.listdir("exports"): z.write(os.path.join("exports", f), f)
+        st.download_button("🗜️ Download ZIP", buf.getvalue(), "batch.zip", "application/zip", use_container_width=True)
         if st.button("Clear Exports"):
             for f in os.listdir("exports"): os.remove(os.path.join("exports", f))
-            st.session_state.batch_done = False
-            st.rerun()
+            st.session_state.batch_done = False; st.rerun()
 
     st.divider()
     voice_map = {"Christopher (Deep)": "en-US-ChristopherNeural", "Ryan (British)": "en-GB-RyanNeural", "Natasha (AU)": "en-AU-NatashaNeural"}
@@ -232,8 +208,7 @@ if query and trigger:
             st.session_state.current_title = f"{sel_vol} #{st.session_state.issue_num}"
             if st.session_state.current_title not in st.session_state.history:
                 st.session_state.history.append(st.session_state.current_title); save_history(st.session_state.history)
-            st.session_state.needs_audio = True
-            st.session_state.audio_bytes = None # Clear old audio
+            st.session_state.needs_audio = True; st.session_state.audio_bytes = None
         else: st.error("Issue not found.")
 
 if st.session_state.current_summary:
@@ -247,40 +222,27 @@ if st.session_state.current_summary:
         if st.session_state.get("needs_audio"):
             with st.spinner("🎙️ Generating audio..."):
                 audio_data = create_audio(st.session_state.current_summary, voice_map[sel_voice])
-                if audio_data:
-                    st.session_state.audio_bytes = audio_data
+                if audio_data: st.session_state.audio_bytes = audio_data
                 st.session_state.needs_audio = False
             st.rerun()
         
-     if st.session_state.get("audio_bytes"):
-            # Convert bytes to base64 so HTML can read it
-            b64_audio = base64.b64encode(st.session_state.audio_bytes).decode()
-            
-            # Custom HTML5 Player with Speed Control
+        if st.session_state.get("audio_bytes"):
+            b64 = base64.b64encode(st.session_state.audio_bytes).decode()
             audio_html = f"""
             <div style="background-color: #1a1c24; padding: 15px; border-radius: 10px; border-left: 4px solid #00d4ff;">
-                <audio id="comic-narrator" style="width: 100%;">
-                    <source src="data:audio/mp3;base64,{b64_audio}" type="audio/mp3">
-                </audio>
+                <audio id="c-player" style="width: 100%;"><source src="data:audio/mp3;base64,{b64}" type="audio/mp3"></audio>
                 <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 10px; color: white; font-family: sans-serif;">
-                    <button onclick="document.getElementById('comic-narrator').play()" style="background: #00d4ff; border: none; border-radius: 5px; padding: 5px 15px; cursor: pointer; font-weight: bold;">PLAY</button>
-                    <button onclick="document.getElementById('comic-narrator').pause()" style="background: #333; border: none; border-radius: 5px; padding: 5px 15px; cursor: pointer; color: white;">PAUSE</button>
+                    <button onclick="document.getElementById('c-player').play()" style="background:#00d4ff;border:none;border-radius:5px;padding:5px 15px;cursor:pointer;font-weight:bold;">PLAY</button>
+                    <button onclick="document.getElementById('c-player').pause()" style="background:#333;border:none;border-radius:5px;padding:5px 15px;cursor:pointer;color:white;">PAUSE</button>
                     <div style="flex-grow: 1; margin: 0 20px;">
-                        <label style="font-size: 12px; display: block; margin-bottom: 5px;">Playback Speed: <span id="speed-val">1.0x</span></label>
-                        <input type="range" id="speed-slider" min="0.5" max="2.0" step="0.1" value="1.0" style="width: 100%; cursor: pointer;">
+                        <label style="font-size: 12px;">Speed: <span id="s-val">1.0x</span></label>
+                        <input type="range" id="s-sld" min="0.5" max="2.0" step="0.1" value="1.0" style="width: 100%; cursor: pointer;">
                     </div>
                 </div>
             </div>
-
             <script>
-                var audio = document.getElementById('comic-narrator');
-                var slider = document.getElementById('speed-slider');
-                var display = document.getElementById('speed-val');
-
-                slider.oninput = function() {{
-                    audio.playbackRate = this.value;
-                    display.innerHTML = this.value + 'x';
-                }};
+                var a = document.getElementById('c-player'); var s = document.getElementById('s-sld'); var d = document.getElementById('s-val');
+                s.oninput = function() {{ a.playbackRate = this.value; d.innerHTML = this.value + 'x'; }};
             </script>
             """
             components.html(audio_html, height=120)
@@ -288,4 +250,3 @@ if st.session_state.current_summary:
         st.divider()
         eb = create_epub(st.session_state.current_title, st.session_state.current_summary, st.session_state.current_img)
         st.download_button("📖 Download EPUB", eb, f"{st.session_state.current_title}.epub", "application/epub+zip", use_container_width=True)
-
