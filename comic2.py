@@ -5,14 +5,14 @@ import re
 import asyncio
 import edge_tts
 import base64
-from ebooklib import epub
-import markdown
-import io
 import json
 import time
+import io
+import markdown
 import streamlit.components.v1 as components
 from google import genai
 from openai import OpenAI
+from ebooklib import epub
 
 # --- CONFIGURATION & STYLING ---
 st.set_page_config(page_title="Comic Vault Analyzer", layout="wide")
@@ -62,10 +62,6 @@ if "current_img" not in st.session_state:
     st.session_state.current_img = None
 if "current_title" not in st.session_state:
     st.session_state.current_title = None
-if "current_writers" not in st.session_state:
-    st.session_state.current_writers = None
-if "current_artists" not in st.session_state:
-    st.session_state.current_artists = None
 if "audio_bytes" not in st.session_state:
     st.session_state.audio_bytes = None
 if "b64_audio" not in st.session_state:
@@ -137,7 +133,6 @@ def get_issue_data(volume_id, issue_num):
         return res.get('results', [])[0] if res.get('results') else None
     except Exception: return None
 
-# --- THE ALL-IN-ONE GEMINI HISTORIAN ---
 @st.cache_data(show_spinner=False)
 def generate_ai_summary(issue_data, series_name, issue_num, alt_name=""):
     chars = ", ".join([c['name'] for c in (issue_data.get('character_credits') or [])])
@@ -148,131 +143,68 @@ def generate_ai_summary(issue_data, series_name, issue_num, alt_name=""):
     base_title = series_name.split(' (')[0]
     search_target = f"{base_title} {alt_name} issue {issue_num}" if alt_name else f"{series_name} issue {issue_num}"
     
-    prompt = f"""
-    You are an expert comic book historian. Write a highly detailed, 500+ word deep-dive summary into {series_name} #{issue_num} by {creators}.
-    """
+    prompt = f"You are an expert comic book historian. Write a highly detailed, 500+ word deep-dive summary into {series_name} #{issue_num}."
     
     if needs_search:
         prompt += f"""
-        CRITICAL INSTRUCTION: The local database is empty. YOU MUST ACTIVELY USE YOUR GOOGLE SEARCH TOOL to find the exact plot.
-        
-        SEARCH TARGET: The user specifically wants the plot for: "{search_target}".
-        SEARCH TIPS: Prioritize searching for that exact phrase on the Marvel/DC Fandom Wiki (e.g., "{search_target} plot synopsis"). 
-        If you cannot find it, try cross-referencing with the creators: {creators}.
-        
-        Do not make an educated guess. Do not apologize. 
-        FILTERING RULE: Ensure you are ONLY summarizing the exact events of issue #{issue_num}. Do not summarize Trade Paperback collections, full story arcs, or previous issues.
+        CRITICAL: Local database is empty. ACTIVELY GOOGLE SEARCH the plot for: "{search_target}".
+        TIPS: Cross-reference with creators: {creators}. If year-based search fails, try searching by Volume numbers.
+        Do not apologize. ONLY summarize issue #{issue_num}. Do not summarize full story arcs.
         """
     else:
-        prompt += f"""
-        Use the "Plot Snippet" below as your absolute source of truth. Do not guess the plot.
-        Plot Snippet: {plot}
-        """
+        prompt += f"\nUse this plot: {plot}"
         
-    prompt += f"""
-    Structure your response using Markdown headings for these exact sections:
-    ### 🌍 Context & Background
-    ### 📖 Detailed Plot Summary
-    ### 💥 Key Moments
-    ### 🏛️ Legacy & Significance
-    
-    RAW DATA:
-    Series: {series_name}
-    Issue: {issue_num}
-    Creators: {creators}
-    Characters: {chars}
-    """
+    prompt += f"\nCharacters involved: {chars}\nFormat with headings: Context, Detailed Plot, Key Moments, Significance."
     
     wait_time = 10 
     for attempt in range(3):
         try:
             from google.genai import types
-            
             config = types.GenerateContentConfig(
                 tools=[types.Tool(google_search=types.GoogleSearch())] if needs_search else None
             )
-                
-            resp = ai_client.models.generate_content(
-                model="gemini-2.0-flash", 
-                contents=prompt,
-                config=config
-            )
+            resp = ai_client.models.generate_content(model="gemini-2.0-flash", contents=prompt, config=config)
             return resp.text
         except Exception as e:
             if "429" in str(e):
-                import time
                 time.sleep(wait_time)
                 wait_time *= 2  
-            else:
-                break 
-                
-    if nvidia_client:
-        try:
-            comp = nvidia_client.chat.completions.create(
-                model="meta/llama-3.1-70b-instruct", 
-                messages=[{"role": "user", "content": prompt}]
-            )
-            return comp.choices[0].message.content
-        except Exception as nvidia_err:
-             return f"NVIDIA Error: {nvidia_err}"
-             
-    return "AI Error: Both primary and backup APIs failed."
+            else: break 
+    return "AI Error: Failed to generate summary."
 
-# --- NEURAL TTS HELPER ---
+def create_epub(title, content):
+    book = epub.EpubBook()
+    book.set_identifier(title.replace(" ", "_").replace("#", ""))
+    book.set_title(title)
+    book.set_language('en')
+    book.add_author("Comic Vault Analyzer")
+    c1 = epub.EpubHtml(title=title, file_name='chap_01.xhtml', lang='en')
+    html_body = markdown.markdown(content)
+    c1.content = f'<h2>{title}</h2>{html_body}'
+    book.add_item(c1)
+    book.toc = (epub.Link('chap_01.xhtml', title, title),)
+    book.add_item(epub.EpubNcx()); book.add_item(epub.EpubNav())
+    book.spine = ['nav', c1]
+    out_stream = io.BytesIO()
+    epub.write_epub(out_stream, book)
+    return out_stream.getvalue()
+
 async def generate_neural_audio(text, voice, filename="summary_temp.mp3"):
     communicate = edge_tts.Communicate(text, voice)
     await communicate.save(filename)
 
 def create_audio(text, voice_choice):
-    if not text or len(text.strip()) == 0:
-        return None
-        
+    if not text or len(text.strip()) == 0: return None
     clean_text = re.sub(r'[^a-zA-Z0-9\s.,!?\'"-]', '', text).strip()[:4000]
     filename = "summary_temp.mp3"
-    
     try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+        loop = asyncio.new_event_loop(); asyncio.set_event_loop(loop)
         loop.run_until_complete(generate_neural_audio(clean_text, voice_choice, filename))
-        
-        with open(filename, "rb") as f:
-            audio_data = f.read()
-            
+        with open(filename, "rb") as f: audio_data = f.read()
         os.remove(filename)
         return audio_data
-    except Exception as e:
-        st.error(f"TTS Error: {e}")
-        return None
-def create_epub(title, content, writers, artists):
-    book = epub.EpubBook()
-    
-    # Set Metadata
-    book.set_identifier(title.replace(" ", "_").replace("#", ""))
-    book.set_title(title)
-    book.set_language('en')
-    book.add_author(f"Writer: {writers} | Artist: {artists}")
+    except Exception: return None
 
-    # Create Chapter
-    c1 = epub.EpubHtml(title=title, file_name='chap_01.xhtml', lang='en')
-    
-    # Convert Markdown to HTML for the EPUB body
-    html_body = markdown.markdown(content)
-    c1.content = f'<h2>{title}</h2>{html_body}'
-    
-    book.add_item(c1)
-
-    # Define Table Of Contents and Spine
-    book.toc = (epub.Link('chap_01.xhtml', title, title),)
-    book.add_item(epub.EpubNcx())
-    book.add_item(epub.EpubNav())
-    book.spine = ['nav', c1]
-
-    # Write to a byte stream so Streamlit can download it
-    out_stream = io.BytesIO()
-    epub.write_epub(out_stream, book)
-    
-    return out_stream.getvalue()
-    
 # --- UI ---
 st.title("📚 Comic Vault Analyzer")
 
@@ -285,167 +217,60 @@ with st.sidebar:
             vol_map = {f"{v['name']} ({v['start_year']})": v['id'] for v in vols}
             sel_vol = st.selectbox("Volume", vol_map.keys())
             vid = vol_map[sel_vol]
-            
             c1, c2, c3 = st.columns([1, 2, 1])
             with c1: st.button("◄", on_click=prev_issue, use_container_width=True)
             with c2: st.text_input("Issue", key="issue_num")
             with c3: st.button("►", on_click=next_issue, use_container_width=True)
-            
-            # --- NEW OVERRIDE BOX ---
-            st.text_input("Wiki/Vol Override (Optional)", key="alt_name", help="If the AI gets the wrong plot, enter the Wiki volume name here (e.g., 'Vol 6').")
-            
+            st.text_input("Wiki/Vol Override (Optional)", key="alt_name")
             trigger = st.button("Analyze", use_container_width=True) or st.session_state.auto_analyze
         else: st.warning("Not found.")
-    else:
-        trigger = False
+    else: trigger = False
 
     st.divider()
-    
-    st.header("Voice Settings")
-    voice_map = {
-        "Christopher (Deep, Cinematic)": "en-US-ChristopherNeural",
-        "Aria (Clear, Professional)": "en-US-AriaNeural",
-        "Guy (Casual, Conversational)": "en-US-GuyNeural",
-        "Jenny (Friendly, Upbeat)": "en-US-JennyNeural",
-        "Steffan (Authoritative, Clear)": "en-US-SteffanNeural",
-        "Ryan (British, Sophisticated)": "en-GB-RyanNeural",
-        "Natasha (Australian, Smooth)": "en-AU-NatashaNeural"
-    }
+    voice_map = {"Christopher (Deep)": "en-US-ChristopherNeural", "Aria (Clear)": "en-US-AriaNeural", "Ryan (British)": "en-GB-RyanNeural"}
     sel_voice_label = st.selectbox("Narrator", options=list(voice_map.keys()))
     
     st.divider()
-
-    st.header("🕰️ History")
     if st.session_state.history:
         st.selectbox("Recent:", ["Select..."] + list(reversed(st.session_state.history)), key="history_selector", on_change=load_from_history)
         st.button("🗑️ Clear", on_click=clear_history, use_container_width=True)
-    else:
-        st.caption("No recent history.")
 
-# --- STEP 1: FETCH DATA & GENERATE TEXT ONLY ---
+# --- EXECUTION ---
 if query and 'vid' in locals() and trigger:
     st.session_state.auto_analyze = False
-    
     with st.spinner("Analyzing comic archives..."):
         data = get_issue_data(vid, st.session_state.issue_num)
         if data:
             if len(str(data.get('deck') or data.get('description') or "").strip()) < 50:
                 st.toast("🔍 Activating Gemini Google Search...")
-            
-            # Ensure alt_name is passed to the AI
             summary = generate_ai_summary(data, sel_vol, st.session_state.issue_num, st.session_state.alt_name)
             st.session_state.current_summary = summary
             st.session_state.current_img = data.get('image', {}).get('medium_url')
             st.session_state.current_title = f"{sel_vol} #{st.session_state.issue_num}"
-            
-            creators = data.get('person_credits') or []
-            writers = [c['name'] for c in creators if 'writer' in c.get('role', '').lower()]
-            artists = [c['name'] for c in creators if 'artist' in c.get('role', '').lower() or 'penciler' in c.get('role', '').lower()]
-            
-            st.session_state.current_writers = ", ".join(writers) if writers else "Unknown Writer"
-            st.session_state.current_artists = ", ".join(artists) if artists else "Unknown Artist"
-            
             if st.session_state.current_title not in st.session_state.history:
-                st.session_state.history.append(st.session_state.current_title)
-                save_history(st.session_state.history)
-            
-            st.session_state.audio_bytes = None
-            st.session_state.b64_audio = None
-            if summary:
-                st.session_state.needs_audio = True
-        else:
-            st.error("Issue not found.")
-            st.session_state.current_summary = None
+                st.session_state.history.append(st.session_state.current_title); save_history(st.session_state.history)
+            st.session_state.audio_bytes = None; st.session_state.b64_audio = None
+            if summary: st.session_state.needs_audio = True
+        else: st.error("Issue not found.")
 
-# --- STEP 2: DISPLAY TEXT IMMEDIATELY ---
 if st.session_state.current_summary:
     col_a, col_b = st.columns([1, 2])
-    with col_a:
-        if st.session_state.current_img: 
-            st.image(st.session_state.current_img)
+    with col_a: 
+        if st.session_state.current_img: st.image(st.session_state.current_img)
     with col_b:
         st.subheader(st.session_state.current_title)
-        st.caption(f"✍️ **Writer:** {st.session_state.current_writers} | 🎨 **Artist:** {st.session_state.current_artists}")
+        with st.container(border=True): st.markdown(st.session_state.current_summary)
         
-        with st.container(border=True): 
-            st.markdown(st.session_state.current_summary)
-        
-        st.divider()
-        st.caption("🎧 **Listen to the Deep Dive**")
-        
-        # --- STEP 3: GENERATE AUDIO IN THE BACKGROUND ---
         if st.session_state.needs_audio:
-            with st.spinner("🎙️ Recording narrator voice..."):
-                selected_voice_code = voice_map[sel_voice_label]
-                audio_bytes = create_audio(st.session_state.current_summary, selected_voice_code)
+            with st.spinner("🎙️ Recording narrator..."):
+                audio_bytes = create_audio(st.session_state.current_summary, voice_map[sel_voice_label])
                 st.session_state.audio_bytes = audio_bytes
-                
-                if audio_bytes:
-                    st.session_state.b64_audio = base64.b64encode(audio_bytes).decode()
-                
+                if audio_bytes: st.session_state.b64_audio = base64.b64encode(audio_bytes).decode()
                 st.session_state.needs_audio = False
-            
             st.rerun()
-
-        # --- STEP 4: DISPLAY THE PLAYER ---
         elif st.session_state.b64_audio:
-            current_theme = {
-                'player': '#1a1c24',
-                'accent': '#00d4ff',
-                'text': '#ffffff'
-            }
+            st.audio(st.session_state.audio_bytes, format="audio/mp3")
             
-            realtime_player_html = f"""
-            <!DOCTYPE html>
-            <html>
-            <head><style>body {{ margin: 0; padding: 0; background-color: transparent; }} .player-box {{ background-color: {current_theme['player']}; padding: 15px; border-radius: 10px; border-left: 4px solid {current_theme['accent']}; font-family: sans-serif; color: {current_theme['text']}; }}</style></head>
-            <body>
-                <div class="player-box">
-                    <audio id="narrator-audio" controls autoplay style="width: 100%;"><source src="data:audio/mp3;base64,{st.session_state.b64_audio}" type="audio/mp3"></audio>
-                    <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 12px;">
-                        <label for="speed-slider" style="font-size: 0.95rem; font-weight: 500;">🏃 Playback Speed: <span id="speed-display">1.0x</span></label>
-                        <input type="range" id="speed-slider" min="0.5" max="2.0" step="0.1" value="1.0" style="width: 50%; cursor: pointer;">
-                    </div>
-                </div>
-                <script>
-                    const audio = document.getElementById("narrator-audio");
-                    const slider = document.getElementById("speed-slider");
-                    const display = document.getElementById("speed-display");
-                    slider.addEventListener("input", function() {{ audio.playbackRate = this.value; display.textContent = parseFloat(this.value).toFixed(1) + "x"; }});
-                </script>
-            </body>
-            </html>
-            """
-            components.html(realtime_player_html, height=120)
-            
-            safe_title = "".join([c for c in st.session_state.current_title if c.isalpha() or c.isdigit() or c==' ']).rstrip()
-            st.download_button(
-                label="💾 Download Audio File",
-                data=st.session_state.audio_bytes,
-                file_name=f"{safe_title}.mp3",
-                mime="audio/mp3",
-                use_container_width=True
-            )
-        else:
-            st.warning("⚠️ Audio could not be generated.")
-
-            # --- NEW: EPUB EXPORT BUTTON ---
         st.divider()
-        st.caption("📖 **Save Summary Offline**")
-        
-        epub_bytes = create_epub(
-            title=st.session_state.current_title, 
-            content=st.session_state.current_summary,
-            writers=st.session_state.current_writers,
-            artists=st.session_state.current_artists
-        )
-        
-        safe_title = "".join([c for c in st.session_state.current_title if c.isalpha() or c.isdigit() or c==' ']).rstrip()
-        st.download_button(
-            label="📖 Download as EPUB",
-            data=epub_bytes,
-            file_name=f"{safe_title}.epub",
-            mime="application/epub+zip",
-            use_container_width=True
-        )
-
+        epub_bytes = create_epub(st.session_state.current_title, st.session_state.current_summary)
+        st.download_button(label="📖 Download EPUB", data=epub_bytes, file_name=f"{st.session_state.current_title}.epub", mime="application/epub+zip", use_container_width=True)
