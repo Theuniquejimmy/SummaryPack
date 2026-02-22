@@ -24,7 +24,7 @@ st.markdown("""
     .main { background-color: #0e1117; }
     .stTextInput > div > div > input { color: #00d4ff; text-align: center; font-size: 20px; }
     [data-testid="stSidebar"] { background-color: #1a1c24; }
-    div[data-testid="column"] button { padding-top: 10px; padding-bottom: 10px; }
+    .chat-bubble { background: #1a1c24; padding: 15px; border-radius: 10px; margin-bottom: 10px; border-left: 3px solid #00d4ff; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -38,21 +38,25 @@ if not COMIC_VINE_KEY or not GEMINI_KEY:
     st.stop()
 
 ai_client = genai.Client(api_key=GEMINI_KEY)
-nvidia_client = OpenAI(base_url="https://integrate.api.nvidia.com/v1", api_key=NVIDIA_API_KEY) if NVIDIA_API_KEY else None
 
 # --- 3. HELPER FUNCTIONS ---
 
-def load_history():
-    if os.path.exists("comic_history.json"):
-        try:
-            with open("comic_history.json", "r") as f: return json.load(f)
-        except: return []
-    return []
-
-def save_history(history_list):
+def safe_prev():
     try:
-        with open("comic_history.json", "w") as f: json.dump(history_list, f)
-    except: pass
+        val = st.session_state.issue_num.strip()
+        curr = int(val) if val else 1
+        if curr > 1:
+            st.session_state.issue_num = str(curr - 1)
+            st.session_state.auto = True
+    except: st.session_state.issue_num = "1"
+
+def safe_next():
+    try:
+        val = st.session_state.issue_num.strip()
+        curr = int(val) if val else 1
+        st.session_state.issue_num = str(curr + 1)
+        st.session_state.auto = True
+    except: st.session_state.issue_num = "1"
 
 @st.cache_data
 def fetch_volumes(query):
@@ -105,7 +109,7 @@ def generate_ai_summary(issue_data, series_name, issue_num, alt_name=""):
 
 def create_epub(title, content, cover_url=None):
     book = epub.EpubBook()
-    book.set_identifier(title.replace(" ", "_").replace("#", ""))
+    book.set_identifier(title.replace(" ", "_"))
     book.set_title(title)
     book.set_language('en')
     book.add_author("Comic Vault Analyzer")
@@ -139,10 +143,12 @@ def create_audio(text, voice_choice):
     except: return None
 
 # --- 4. SESSION STATE ---
-if "history" not in st.session_state: st.session_state.history = load_history()
+if "history" not in st.session_state: st.session_state.history = []
 if "issue_num" not in st.session_state: st.session_state.issue_num = "1"
 if "current_summary" not in st.session_state: st.session_state.current_summary = None
 if "batch_done" not in st.session_state: st.session_state.batch_done = False
+if "auto" not in st.session_state: st.session_state.auto = False
+if "chat_history" not in st.session_state: st.session_state.chat_history = []
 
 # --- 5. UI SIDEBAR ---
 with st.sidebar:
@@ -155,11 +161,11 @@ with st.sidebar:
             sel_vol = st.selectbox("Volume", vol_map.keys())
             vid = vol_map[sel_vol]
             c1, c2, c3 = st.columns([1, 2, 1])
-            with c1: st.button("◄", on_click=lambda: st.session_state.update({"issue_num": str(int(st.session_state.issue_num)-1), "auto":True}))
+            with c1: st.button("◄", on_click=safe_prev, use_container_width=True)
             with c2: st.text_input("Issue", key="issue_num")
-            with c3: st.button("►", on_click=lambda: st.session_state.update({"issue_num": str(int(st.session_state.issue_num)+1), "auto":True}))
+            with c3: st.button("►", on_click=safe_next, use_container_width=True)
             st.text_input("Wiki/Vol Override", key="alt_name")
-            trigger = st.button("Analyze", use_container_width=True) or st.session_state.get("auto", False)
+            trigger = st.button("Analyze", use_container_width=True) or st.session_state.auto
         else: st.warning("Not found."); trigger = False
     else: trigger = False
     
@@ -188,12 +194,9 @@ with st.sidebar:
         with zipfile.ZipFile(buf, "w") as z:
             for f in os.listdir("exports"): z.write(os.path.join("exports", f), f)
         st.download_button("🗜️ Download ZIP", buf.getvalue(), "batch.zip", "application/zip", use_container_width=True)
-        if st.button("Clear Exports"):
-            for f in os.listdir("exports"): os.remove(os.path.join("exports", f))
-            st.session_state.batch_done = False; st.rerun()
 
     st.divider()
-    voice_map = {"Christopher (Deep)": "en-US-ChristopherNeural", "Ryan (British)": "en-GB-RyanNeural", "Natasha (AU)": "en-AU-NatashaNeural"}
+    voice_map = {"Christopher (Deep)": "en-US-ChristopherNeural", "Ryan (British)": "en-GB-RyanNeural"}
     sel_voice = st.selectbox("Narrator", options=list(voice_map.keys()))
 
 # --- 6. MAIN EXECUTION ---
@@ -206,47 +209,67 @@ if query and trigger:
             st.session_state.current_summary = summary
             st.session_state.current_img = data.get('image', {}).get('medium_url')
             st.session_state.current_title = f"{sel_vol} #{st.session_state.issue_num}"
-            if st.session_state.current_title not in st.session_state.history:
-                st.session_state.history.append(st.session_state.current_title); save_history(st.session_state.history)
             st.session_state.needs_audio = True; st.session_state.audio_bytes = None
+            st.session_state.chat_history = [] # Reset chat for new issue
         else: st.error("Issue not found.")
 
 if st.session_state.current_summary:
-    col_a, col_b = st.columns([1, 2])
-    with col_a: 
-        if st.session_state.current_img: st.image(st.session_state.current_img)
-    with col_b:
-        st.subheader(st.session_state.current_title)
-        st.markdown(st.session_state.current_summary)
-        
-        if st.session_state.get("needs_audio"):
-            with st.spinner("🎙️ Generating audio..."):
-                audio_data = create_audio(st.session_state.current_summary, voice_map[sel_voice])
-                if audio_data: st.session_state.audio_bytes = audio_data
-                st.session_state.needs_audio = False
-            st.rerun()
-        
-        if st.session_state.get("audio_bytes"):
-            b64 = base64.b64encode(st.session_state.audio_bytes).decode()
-            audio_html = f"""
-            <div style="background-color: #1a1c24; padding: 15px; border-radius: 10px; border-left: 4px solid #00d4ff;">
-                <audio id="c-player" style="width: 100%;"><source src="data:audio/mp3;base64,{b64}" type="audio/mp3"></audio>
-                <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 10px; color: white; font-family: sans-serif;">
-                    <button onclick="document.getElementById('c-player').play()" style="background:#00d4ff;border:none;border-radius:5px;padding:5px 15px;cursor:pointer;font-weight:bold;">PLAY</button>
-                    <button onclick="document.getElementById('c-player').pause()" style="background:#333;border:none;border-radius:5px;padding:5px 15px;cursor:pointer;color:white;">PAUSE</button>
-                    <div style="flex-grow: 1; margin: 0 20px;">
-                        <label style="font-size: 12px;">Speed: <span id="s-val">1.0x</span></label>
-                        <input type="range" id="s-sld" min="0.5" max="2.0" step="0.1" value="1.0" style="width: 100%; cursor: pointer;">
+    tab1, tab2 = st.tabs(["📖 Summary & Audio", "💬 Ask the Interrogator"])
+    
+    with tab1:
+        col_a, col_b = st.columns([1, 2])
+        with col_a: 
+            if st.session_state.current_img: st.image(st.session_state.current_img)
+        with col_b:
+            st.subheader(st.session_state.current_title)
+            st.markdown(st.session_state.current_summary)
+            
+            if st.session_state.get("needs_audio"):
+                with st.spinner("🎙️ Generating audio..."):
+                    audio_data = create_audio(st.session_state.current_summary, voice_map[sel_voice])
+                    if audio_data: st.session_state.audio_bytes = audio_data
+                    st.session_state.needs_audio = False
+                st.rerun()
+            
+            if st.session_state.get("audio_bytes"):
+                b64 = base64.b64encode(st.session_state.audio_bytes).decode()
+                audio_html = f"""
+                <div style="background-color: #1a1c24; padding: 15px; border-radius: 10px; border-left: 4px solid #00d4ff;">
+                    <audio id="c-player" style="width: 100%;"><source src="data:audio/mp3;base64,{b64}" type="audio/mp3"></audio>
+                    <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 10px; color: white; font-family: sans-serif;">
+                        <button onclick="document.getElementById('c-player').play()" style="background:#00d4ff;border:none;border-radius:5px;padding:5px 15px;cursor:pointer;font-weight:bold;">PLAY</button>
+                        <button onclick="document.getElementById('c-player').pause()" style="background:#333;border:none;border-radius:5px;padding:5px 15px;cursor:pointer;color:white;">PAUSE</button>
+                        <div style="flex-grow: 1; margin: 0 20px;">
+                            <label style="font-size: 12px;">Speed: <span id="s-val">1.0x</span></label>
+                            <input type="range" id="s-sld" min="0.5" max="2.0" step="0.1" value="1.0" style="width: 100%; cursor: pointer;">
+                        </div>
                     </div>
                 </div>
-            </div>
-            <script>
-                var a = document.getElementById('c-player'); var s = document.getElementById('s-sld'); var d = document.getElementById('s-val');
-                s.oninput = function() {{ a.playbackRate = this.value; d.innerHTML = this.value + 'x'; }};
-            </script>
-            """
-            components.html(audio_html, height=120)
+                <script>
+                    var a = document.getElementById('c-player'); var s = document.getElementById('s-sld'); var d = document.getElementById('s-val');
+                    s.oninput = function() {{ a.playbackRate = this.value; d.innerHTML = this.value + 'x'; }};
+                </script>
+                """
+                components.html(audio_html, height=120)
             
-        st.divider()
-        eb = create_epub(st.session_state.current_title, st.session_state.current_summary, st.session_state.current_img)
-        st.download_button("📖 Download EPUB", eb, f"{st.session_state.current_title}.epub", "application/epub+zip", use_container_width=True)
+            st.divider()
+            eb = create_epub(st.session_state.current_title, st.session_state.current_summary, st.session_state.current_img)
+            st.download_button("📖 Download EPUB", eb, f"{st.session_state.current_title}.epub", "application/epub+zip", use_container_width=True)
+
+    with tab2:
+        st.caption(f"Discussing: {st.session_state.current_title}")
+        chat_container = st.container(height=400)
+        for chat in st.session_state.chat_history:
+            chat_container.markdown(f"<div class='chat-bubble'><b>{'User' if chat['role']=='user' else 'Interrogator'}:</b><br>{chat['content']}</div>", unsafe_allow_html=True)
+        
+        user_input = st.chat_input("Ask a question about this issue...")
+        if user_input:
+            st.session_state.chat_history.append({"role": "user", "content": user_input})
+            
+            # Context-aware response
+            chat_prompt = f"You are a comic expert. Context: {st.session_state.current_summary}\n\nUser Question: {user_input}"
+            try:
+                response = ai_client.models.generate_content(model="gemini-2.0-flash", contents=chat_prompt)
+                st.session_state.chat_history.append({"role": "assistant", "content": response.text})
+                st.rerun()
+            except: st.error("Chat error.")
