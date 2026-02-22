@@ -135,51 +135,34 @@ def get_issue_data(volume_id, issue_num):
         return res.get('results', [])[0] if res.get('results') else None
     except Exception: return None
 
-# --- AGENT 1: THE RESEARCHER (TAVILY API) ---
-def get_plot_from_search(series_name, issue_num, creators):
-    """A dedicated AI search agent using Tavily to scrape missing plots."""
-    if not tavily_client:
-        return "Tavily API key missing. Cannot search the web."
-        
-    st.toast("🔍 Comic Vine plot missing! Deploying Tavily Search Agent...")
-    
-    clean_series = re.sub(r'[^a-zA-Z0-9\s]', '', series_name)
-    # THE FIX 1: Tighter search query to prevent pulling arc summaries instead of single issues
-    search_query = f"site:fandom.com {clean_series} \"issue {issue_num}\" OR \"#{issue_num}\" plot synopsis"
-    
-    for attempt in range(3):
-        try:
-            response = tavily_client.search(query=search_query, search_depth="advanced", max_results=3)
-            if response and 'results' in response:
-                web_plot = " ".join([res['content'] for res in response['results']])
-                web_plot = web_plot[:6000]
-                return f"WIKI SEARCH RESULTS: {web_plot}"
-            return "Search completed but no plot data found."
-        except Exception as e:
-            st.toast(f"⏳ Network hiccup. Retrying... (Attempt {attempt+1}/3)")
-            time.sleep(2)
-            
-    return "Search failed. Do your best to recall."
-
-# --- AGENT 2: THE HISTORIAN ---
+# --- THE ALL-IN-ONE GEMINI HISTORIAN ---
 @st.cache_data(show_spinner=False)
 def generate_ai_summary(issue_data, series_name, issue_num):
     chars = ", ".join([c['name'] for c in (issue_data.get('character_credits') or [])])
     creators = ", ".join([p['name'] for p in (issue_data.get('person_credits') or [])])
     plot = str(issue_data.get('deck') or issue_data.get('description') or "")[:5000]
     
-    if len(plot.strip()) < 50:
-        plot = get_plot_from_search(series_name, issue_num, creators)
+    # Check if Comic Vine gave us a useless plot
+    needs_search = len(plot.strip()) < 50
     
-    # THE FIX 2: The Sniper Filter Prompt
+    # Build the dynamic prompt
     prompt = f"""
     You are an expert comic book historian. Write a highly detailed, 500+ word deep-dive summary into {series_name} #{issue_num} by {creators}.
+    """
     
-    CRITICAL FILTERING INSTRUCTION: 
-    The "Plot Snippet" below contains raw web search results. It might contain summaries for MULTIPLE issues or the wrong issue entirely. 
-    You MUST carefully read the snippet and ONLY summarize the events that happen EXACTLY in issue #{issue_num}. Ignore events from previous or future issues.
-    If the snippet clearly does not contain the plot for #{issue_num}, explicitly state: "The exact plot details for this specific issue are currently unavailable." Do not guess or use another issue's plot.
-    
+    if needs_search:
+        prompt += f"""
+        CRITICAL INSTRUCTION: The local database is empty. YOU MUST ACTIVELY USE YOUR GOOGLE SEARCH TOOL to find the exact plot for "{series_name} issue {issue_num}".
+        Do not make an educated guess. Do not apologize. 
+        FILTERING RULE: Ensure you are ONLY summarizing the exact events of issue #{issue_num}. Do not summarize the entire story arc or previous issues.
+        """
+    else:
+        prompt += f"""
+        Use the "Plot Snippet" below as your absolute source of truth. Do not guess the plot.
+        Plot Snippet: {plot}
+        """
+        
+    prompt += f"""
     Structure your response using Markdown headings for these exact sections:
     ### 🌍 Context & Background
     ### 📖 Detailed Plot Summary
@@ -191,13 +174,26 @@ def generate_ai_summary(issue_data, series_name, issue_num):
     Issue: {issue_num}
     Creators: {creators}
     Characters: {chars}
-    Plot Snippet: {plot}
     """
     
     wait_time = 10 
     for attempt in range(3):
         try:
-            resp = ai_client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
+            from google.genai import types
+            
+            # Conditionally turn on the Search tool ONLY if we need it to save quota
+            config = types.GenerateContentConfig(
+                tools=[types.Tool(google_search=types.GoogleSearch())] if needs_search else None
+            )
+            
+            if needs_search:
+                st.toast(f"🔍 Activating Gemini Google Search... (Attempt {attempt+1}/3)")
+                
+            resp = ai_client.models.generate_content(
+                model="gemini-2.0-flash", 
+                contents=prompt,
+                config=config
+            )
             return resp.text
         except Exception as e:
             if "429" in str(e):
@@ -205,8 +201,10 @@ def generate_ai_summary(issue_data, series_name, issue_num):
                 time.sleep(wait_time)
                 wait_time *= 2  
             else:
+                st.toast(f"⚠️ Gemini Error: {e}")
                 break 
                 
+    # Fallback to NVIDIA if Gemini fails 3 times
     if nvidia_client:
         st.caption("ℹ️ *Gemini unavailable. Using NVIDIA Backup...*")
         try:
@@ -394,4 +392,5 @@ if st.session_state.current_summary:
             )
         else:
             st.warning("⚠️ Audio could not be generated.")
+
 
