@@ -12,6 +12,8 @@ Book Summaries:
 https://drive.google.com/file/d/1_n9892RzORmvMdbLY8tQRk2TlHkZ4scC/view?usp=sharing
 
 ------
+https://comicrecap.streamlit.app/
+
 This application is a specialized AI-driven comic book historian and digital archivist. It bridges the gap between structured database metadata (from Comic Vine) and live web research (via Gemini Google Search) to create high-quality, narrated deep dives of individual comic issues.
 
 Here is a breakdown of the "brain" and the "engine" behind your program.
