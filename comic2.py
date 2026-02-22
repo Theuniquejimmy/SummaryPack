@@ -32,7 +32,7 @@ COMIC_VINE_KEY = os.environ.get("COMIC_VINE_KEY")
 GEMINI_KEY = os.environ.get("GEMINI_KEY")
 
 if not COMIC_VINE_KEY or not GEMINI_KEY:
-    st.error("Missing API Keys! Check environment variables.")
+    st.error("Missing API Keys!")
     st.stop()
 
 ai_client = genai.Client(api_key=GEMINI_KEY)
@@ -91,7 +91,6 @@ def generate_ai_summary(issue_data, series_name, issue_num, alt_name=""):
         prompt += f"\nPLOT: {plot}"
     prompt += f"\nCharacters: {chars}\nHeadings: Context, Detailed Plot, Key Moments, Significance."
 
-    # Starting with the ultra-stable 2.5 Flash
     models = ["gemini-2.5-flash", "gemini-3.1-pro-preview"]
     for m in models:
         wait = 5
@@ -108,7 +107,7 @@ def generate_ai_summary(issue_data, series_name, issue_num, alt_name=""):
 
 def create_epub(title, content, cover_url=None):
     book = epub.EpubBook()
-    book.set_identifier(title.replace(" ", "_"))
+    book.set_identifier(title.replace(" ", "_").replace("#", ""))
     book.set_title(title)
     book.set_language('en')
     book.add_author("Comic Vault Analyzer")
@@ -141,10 +140,13 @@ def create_audio(text, voice_choice):
         return loop.run_until_complete(generate_neural_audio(clean, voice_choice))
     except: return None
 
-# --- 4. SESSION STATE ---
+# --- 4. SESSION STATE (The Pre-Flight Fix) ---
 if "history" not in st.session_state: st.session_state.history = []
 if "issue_num" not in st.session_state: st.session_state.issue_num = "1"
 if "current_summary" not in st.session_state: st.session_state.current_summary = None
+if "current_title" not in st.session_state: st.session_state.current_title = None
+if "current_img" not in st.session_state: st.session_state.current_img = None
+if "audio_bytes" not in st.session_state: st.session_state.audio_bytes = None
 if "batch_done" not in st.session_state: st.session_state.batch_done = False
 if "auto" not in st.session_state: st.session_state.auto = False
 if "chat_history" not in st.session_state: st.session_state.chat_history = []
@@ -199,8 +201,6 @@ with st.sidebar:
     sel_voice = st.selectbox("Narrator", options=list(voice_map.keys()))
 
 # --- 6. MAIN EXECUTION ---
-
-# Create the tabs globally so they are always accessible
 tab1, tab2 = st.tabs(["📖 Summary & Audio", "💬 Interrogator Chat"])
 
 if query and trigger:
@@ -213,10 +213,9 @@ if query and trigger:
             st.session_state.current_img = data.get('image', {}).get('medium_url')
             st.session_state.current_title = f"{sel_vol} #{st.session_state.issue_num}"
             st.session_state.needs_audio = True; st.session_state.audio_bytes = None
-            st.session_state.chat_history = [] # Reset chat when a NEW book is analyzed
+            st.session_state.chat_history = []
         else: st.error("Issue not found.")
 
-# --- TAB 1: SUMMARY LOGIC ---
 with tab1:
     if st.session_state.current_summary:
         col_a, col_b = st.columns([1, 2])
@@ -233,7 +232,7 @@ with tab1:
                     st.session_state.needs_audio = False
                 st.rerun()
             
-            if st.session_state.get("audio_bytes"):
+            if st.session_state.audio_bytes:
                 b64 = base64.b64encode(st.session_state.audio_bytes).decode()
                 audio_html = f"""
                 <div style="background-color: #1a1c24; padding: 15px; border-radius: 10px; border-left: 4px solid #00d4ff;">
@@ -241,40 +240,47 @@ with tab1:
                     <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 10px; color: white; font-family: sans-serif;">
                         <button onclick="document.getElementById('c-player').play()" style="background:#00d4ff;border:none;border-radius:5px;padding:5px 15px;cursor:pointer;font-weight:bold;">PLAY</button>
                         <button onclick="document.getElementById('c-player').pause()" style="background:#333;border:none;border-radius:5px;padding:5px 15px;cursor:pointer;color:white;">PAUSE</button>
+                        <div style="flex-grow: 1; margin: 0 20px;">
+                            <label style="font-size: 12px;">Speed: <span id="s-val">1.0x</span></label>
+                            <input type="range" id="s-sld" min="0.5" max="2.0" step="0.1" value="1.0" style="width: 100%; cursor: pointer;">
+                        </div>
                     </div>
                 </div>
+                <script>
+                    var a = document.getElementById('c-player'); var s = document.getElementById('s-sld'); var d = document.getElementById('s-val');
+                    s.oninput = function() {{ a.playbackRate = this.value; d.innerHTML = this.value + 'x'; }};
+                </script>
                 """
                 components.html(audio_html, height=120)
             
             st.divider()
             eb = create_epub(st.session_state.current_title, st.session_state.current_summary, st.session_state.current_img)
-            st.download_button("📖 Download EPUB", eb, f"{st.session_state.current_title}.epub", "application/epub+zip", use_container_width=True)
+            st.download_button("📖 Download EPUB", eb, f"{st.session_state.current_title}.epub", "application/epub+zip")
     else:
-        st.info("👈 Use the sidebar to search and analyze a comic to see its summary here!")
+        st.info("👈 Use the sidebar to find a comic!")
 
-# --- TAB 2: CHAT LOGIC (ALWAYS OPEN) ---
 with tab2:
     if st.session_state.current_title:
-        st.caption(f"Currently Discussing: {st.session_state.current_title}")
+        st.caption(f"Discussing: {st.session_state.current_title}")
     else:
-        st.caption("General Chat Mode: Ask me anything about comics!")
+        st.caption("General Chat Mode")
     
+    if st.button("🗑️ Clear Chat"):
+        st.session_state.chat_history = []
+        st.rerun()
+
     for chat in st.session_state.chat_history:
-        role_label = "🦸 You" if chat['role'] == 'user' else "🤖 Interrogator"
-        st.markdown(f"<div class='chat-bubble'><b>{role_label}:</b><br>{chat['content']}</div>", unsafe_allow_html=True)
+        role = "🦸 You" if chat['role'] == 'user' else "🤖 Interrogator"
+        st.markdown(f"<div class='chat-bubble'><b>{role}:</b><br>{chat['content']}</div>", unsafe_allow_html=True)
     
-    user_input = st.chat_input("Message the Interrogator...")
+    user_input = st.chat_input("Ask about comics...")
     if user_input:
         st.session_state.chat_history.append({"role": "user", "content": user_input})
-        
-        with st.spinner("Consulting the archives..."):
-            # If a summary exists, use it as context. Otherwise, just go general.
-            context = st.session_state.current_summary if st.session_state.current_summary else "General comic knowledge."
-            chat_prompt = f"You are a comic expert. Context: {context}\n\nUser Question: {user_input}"
-            
+        with st.spinner("Thinking..."):
+            ctx = st.session_state.current_summary if st.session_state.current_summary else "General comic knowledge."
+            prompt = f"Expert comic historian. Context: {ctx}\n\nUser: {user_input}"
             try:
-                response = ai_client.models.generate_content(model="gemini-2.0-flash", contents=chat_prompt)
-                st.session_state.chat_history.append({"role": "assistant", "content": response.text})
+                resp = ai_client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
+                st.session_state.chat_history.append({"role": "assistant", "content": resp.text})
                 st.rerun()
-            except Exception as e:
-                st.error(f"Chat failed: {e}")
+            except: st.error("Chat blipped. Try again.")
