@@ -49,6 +49,8 @@ if "search_query" not in st.session_state:
     st.session_state.search_query = ""
 if "issue_num" not in st.session_state:
     st.session_state.issue_num = "1"
+if "alt_name" not in st.session_state:
+    st.session_state.alt_name = ""
 if "auto_analyze" not in st.session_state:
     st.session_state.auto_analyze = False
 if "current_summary" not in st.session_state:
@@ -134,12 +136,14 @@ def get_issue_data(volume_id, issue_num):
 
 # --- THE ALL-IN-ONE GEMINI HISTORIAN ---
 @st.cache_data(show_spinner=False)
-def generate_ai_summary(issue_data, series_name, issue_num):
+def generate_ai_summary(issue_data, series_name, issue_num, alt_name=""):
     chars = ", ".join([c['name'] for c in (issue_data.get('character_credits') or [])])
     creators = ", ".join([p['name'] for p in (issue_data.get('person_credits') or [])])
     plot = str(issue_data.get('deck') or issue_data.get('description') or "")[:5000]
     
     needs_search = len(plot.strip()) < 50
+    base_title = series_name.split(' (')[0]
+    search_target = f"{base_title} {alt_name} issue {issue_num}" if alt_name else f"{series_name} issue {issue_num}"
     
     prompt = f"""
     You are an expert comic book historian. Write a highly detailed, 500+ word deep-dive summary into {series_name} #{issue_num} by {creators}.
@@ -149,8 +153,9 @@ def generate_ai_summary(issue_data, series_name, issue_num):
         prompt += f"""
         CRITICAL INSTRUCTION: The local database is empty. YOU MUST ACTIVELY USE YOUR GOOGLE SEARCH TOOL to find the exact plot.
         
-        SEARCH TIPS: Comic databases often use "Volume" numbers instead of years. For example, Daredevil (2019) is actually "Daredevil Vol 6" on the Marvel Fandom Wiki. 
-        If you cannot find the single issue under the year, you MUST search using the creator's names and variations of the title (e.g., "{series_name.split(' (')[0]} Vol 6 #{issue_num} plot" or "{series_name.split(' (')[0]} {creators} issue {issue_num} synopsis") to find the exact page.
+        SEARCH TARGET: The user specifically wants the plot for: "{search_target}".
+        SEARCH TIPS: Prioritize searching for that exact phrase on the Marvel/DC Fandom Wiki (e.g., "{search_target} plot synopsis"). 
+        If you cannot find it, try cross-referencing with the creators: {creators}.
         
         Do not make an educated guess. Do not apologize. 
         FILTERING RULE: Ensure you are ONLY summarizing the exact events of issue #{issue_num}. Do not summarize Trade Paperback collections, full story arcs, or previous issues.
@@ -210,6 +215,32 @@ def generate_ai_summary(issue_data, series_name, issue_num):
              
     return "AI Error: Both primary and backup APIs failed."
 
+# --- NEURAL TTS HELPER ---
+async def generate_neural_audio(text, voice, filename="summary_temp.mp3"):
+    communicate = edge_tts.Communicate(text, voice)
+    await communicate.save(filename)
+
+def create_audio(text, voice_choice):
+    if not text or len(text.strip()) == 0:
+        return None
+        
+    clean_text = re.sub(r'[^a-zA-Z0-9\s.,!?\'"-]', '', text).strip()[:4000]
+    filename = "summary_temp.mp3"
+    
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(generate_neural_audio(clean_text, voice_choice, filename))
+        
+        with open(filename, "rb") as f:
+            audio_data = f.read()
+            
+        os.remove(filename)
+        return audio_data
+    except Exception as e:
+        st.error(f"TTS Error: {e}")
+        return None
+
 # --- UI ---
 st.title("📚 Comic Vault Analyzer")
 
@@ -227,6 +258,9 @@ with st.sidebar:
             with c1: st.button("◄", on_click=prev_issue, use_container_width=True)
             with c2: st.text_input("Issue", key="issue_num")
             with c3: st.button("►", on_click=next_issue, use_container_width=True)
+            
+            # --- NEW OVERRIDE BOX ---
+            st.text_input("Wiki/Vol Override (Optional)", key="alt_name", help="If the AI gets the wrong plot, enter the Wiki volume name here (e.g., 'Vol 6').")
             
             trigger = st.button("Analyze", use_container_width=True) or st.session_state.auto_analyze
         else: st.warning("Not found.")
@@ -263,11 +297,11 @@ if query and 'vid' in locals() and trigger:
     with st.spinner("Analyzing comic archives..."):
         data = get_issue_data(vid, st.session_state.issue_num)
         if data:
-            # Re-added the UI toast here so the pure data function doesn't crash the cache!
             if len(str(data.get('deck') or data.get('description') or "").strip()) < 50:
                 st.toast("🔍 Activating Gemini Google Search...")
-                
-            summary = generate_ai_summary(data, sel_vol, st.session_state.issue_num)
+            
+            # Ensure alt_name is passed to the AI
+            summary = generate_ai_summary(data, sel_vol, st.session_state.issue_num, st.session_state.alt_name)
             st.session_state.current_summary = summary
             st.session_state.current_img = data.get('image', {}).get('medium_url')
             st.session_state.current_title = f"{sel_vol} #{st.session_state.issue_num}"
@@ -362,4 +396,3 @@ if st.session_state.current_summary:
             )
         else:
             st.warning("⚠️ Audio could not be generated.")
-
