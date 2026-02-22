@@ -147,9 +147,13 @@ def generate_ai_summary(issue_data, series_name, issue_num):
     
     if needs_search:
         prompt += f"""
-        CRITICAL INSTRUCTION: The local database is empty. YOU MUST ACTIVELY USE YOUR GOOGLE SEARCH TOOL to find the exact plot for "{series_name} issue {issue_num}".
+        CRITICAL INSTRUCTION: The local database is empty. YOU MUST ACTIVELY USE YOUR GOOGLE SEARCH TOOL to find the exact plot.
+        
+        SEARCH TIPS: Comic databases often use "Volume" numbers instead of years. For example, Daredevil (2019) is actually "Daredevil Vol 6" on the Marvel Fandom Wiki. 
+        If you cannot find the single issue under the year, you MUST search using the creator's names and variations of the title (e.g., "{series_name.split(' (')[0]} Vol 6 #{issue_num} plot" or "{series_name.split(' (')[0]} {creators} issue {issue_num} synopsis") to find the exact page.
+        
         Do not make an educated guess. Do not apologize. 
-        FILTERING RULE: Ensure you are ONLY summarizing the exact events of issue #{issue_num}. Do not summarize the entire story arc or previous issues.
+        FILTERING RULE: Ensure you are ONLY summarizing the exact events of issue #{issue_num}. Do not summarize Trade Paperback collections, full story arcs, or previous issues.
         """
     else:
         prompt += f"""
@@ -205,32 +209,6 @@ def generate_ai_summary(issue_data, series_name, issue_num):
              return f"NVIDIA Error: {nvidia_err}"
              
     return "AI Error: Both primary and backup APIs failed."
-
-# --- NEURAL TTS HELPER ---
-async def generate_neural_audio(text, voice, filename="summary_temp.mp3"):
-    communicate = edge_tts.Communicate(text, voice)
-    await communicate.save(filename)
-
-def create_audio(text, voice_choice):
-    if not text or len(text.strip()) == 0:
-        return None
-        
-    clean_text = re.sub(r'[^a-zA-Z0-9\s.,!?\'"-]', '', text).strip()[:4000]
-    filename = "summary_temp.mp3"
-    
-    try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(generate_neural_audio(clean_text, voice_choice, filename))
-        
-        with open(filename, "rb") as f:
-            audio_data = f.read()
-            
-        os.remove(filename)
-        return audio_data
-    except Exception as e:
-        st.error(f"TTS Error: {e}")
-        return None
 
 # --- UI ---
 st.title("📚 Comic Vault Analyzer")
@@ -384,3 +362,4 @@ if st.session_state.current_summary:
             )
         else:
             st.warning("⚠️ Audio could not be generated.")
+
