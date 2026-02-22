@@ -13,10 +13,9 @@ import random
 import zipfile
 import streamlit.components.v1 as components
 from google import genai
-from openai import OpenAI
 from ebooklib import epub
 
-# --- 1. CONFIGURATION & STYLING ---
+# --- 1. CONFIGURATION ---
 st.set_page_config(page_title="Comic Vault Analyzer", layout="wide")
 
 st.markdown("""
@@ -24,14 +23,13 @@ st.markdown("""
     .main { background-color: #0e1117; }
     .stTextInput > div > div > input { color: #00d4ff; text-align: center; font-size: 20px; }
     [data-testid="stSidebar"] { background-color: #1a1c24; }
-    .chat-bubble { background: #1a1c24; padding: 15px; border-radius: 10px; margin-bottom: 10px; border-left: 3px solid #00d4ff; }
+    .chat-bubble { background: #1a1c24; padding: 15px; border-radius: 10px; margin-bottom: 10px; border-left: 3px solid #00d4ff; font-size: 14px; }
     </style>
     """, unsafe_allow_html=True)
 
 # --- 2. API KEYS ---
 COMIC_VINE_KEY = os.environ.get("COMIC_VINE_KEY")
 GEMINI_KEY = os.environ.get("GEMINI_KEY")
-NVIDIA_API_KEY = os.environ.get("NVIDIA_API_KEY")
 
 if not COMIC_VINE_KEY or not GEMINI_KEY:
     st.error("Missing API Keys! Check environment variables.")
@@ -93,6 +91,7 @@ def generate_ai_summary(issue_data, series_name, issue_num, alt_name=""):
         prompt += f"\nPLOT: {plot}"
     prompt += f"\nCharacters: {chars}\nHeadings: Context, Detailed Plot, Key Moments, Significance."
 
+    # Starting with the ultra-stable 2.5 Flash
     models = ["gemini-2.5-flash", "gemini-3.1-pro-preview"]
     for m in models:
         wait = 5
@@ -210,11 +209,11 @@ if query and trigger:
             st.session_state.current_img = data.get('image', {}).get('medium_url')
             st.session_state.current_title = f"{sel_vol} #{st.session_state.issue_num}"
             st.session_state.needs_audio = True; st.session_state.audio_bytes = None
-            st.session_state.chat_history = [] # Reset chat for new issue
+            st.session_state.chat_history = [] # Reset chat
         else: st.error("Issue not found.")
 
 if st.session_state.current_summary:
-    tab1, tab2 = st.tabs(["📖 Summary & Audio", "💬 Ask the Interrogator"])
+    tab1, tab2 = st.tabs(["📖 Summary & Audio", "💬 Interrogator Chat"])
     
     with tab1:
         col_a, col_b = st.columns([1, 2])
@@ -257,19 +256,26 @@ if st.session_state.current_summary:
             st.download_button("📖 Download EPUB", eb, f"{st.session_state.current_title}.epub", "application/epub+zip", use_container_width=True)
 
     with tab2:
-        st.caption(f"Discussing: {st.session_state.current_title}")
-        chat_container = st.container(height=400)
-        for chat in st.session_state.chat_history:
-            chat_container.markdown(f"<div class='chat-bubble'><b>{'User' if chat['role']=='user' else 'Interrogator'}:</b><br>{chat['content']}</div>", unsafe_allow_html=True)
+        st.caption(f"Frontier Reasoning: {st.session_state.current_title}")
         
-        user_input = st.chat_input("Ask a question about this issue...")
+        # Display chat history in order
+        for chat in st.session_state.chat_history:
+            role_label = "🦸 You" if chat['role'] == 'user' else "🤖 Interrogator"
+            st.markdown(f"<div class='chat-bubble'><b>{role_label}:</b><br>{chat['content']}</div>", unsafe_allow_html=True)
+        
+        # Stable Chat Input
+        user_input = st.chat_input("Ask about this issue...")
         if user_input:
+            # Add user message to history immediately
             st.session_state.chat_history.append({"role": "user", "content": user_input})
             
-            # Context-aware response
-            chat_prompt = f"You are a comic expert. Context: {st.session_state.current_summary}\n\nUser Question: {user_input}"
-            try:
-                response = ai_client.models.generate_content(model="gemini-2.0-flash", contents=chat_prompt)
-                st.session_state.chat_history.append({"role": "assistant", "content": response.text})
-                st.rerun()
-            except: st.error("Chat error.")
+            # Show a targeted spinner
+            with st.spinner("Consulting the archives..."):
+                chat_prompt = f"Expert comic historian. Summary Context: {st.session_state.current_summary}\n\nUser Question: {user_input}"
+                try:
+                    # Using Flash for instant chat replies
+                    response = ai_client.models.generate_content(model="gemini-2.0-flash", contents=chat_prompt)
+                    st.session_state.chat_history.append({"role": "assistant", "content": response.text})
+                    st.rerun()
+                except Exception as chat_err:
+                    st.error(f"Chat failed: {chat_err}")
