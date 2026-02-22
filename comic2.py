@@ -199,6 +199,10 @@ with st.sidebar:
     sel_voice = st.selectbox("Narrator", options=list(voice_map.keys()))
 
 # --- 6. MAIN EXECUTION ---
+
+# Create the tabs globally so they are always accessible
+tab1, tab2 = st.tabs(["📖 Summary & Audio", "💬 Interrogator Chat"])
+
 if query and trigger:
     st.session_state.auto = False
     with st.spinner("Analyzing..."):
@@ -209,13 +213,12 @@ if query and trigger:
             st.session_state.current_img = data.get('image', {}).get('medium_url')
             st.session_state.current_title = f"{sel_vol} #{st.session_state.issue_num}"
             st.session_state.needs_audio = True; st.session_state.audio_bytes = None
-            st.session_state.chat_history = [] # Reset chat
+            st.session_state.chat_history = [] # Reset chat when a NEW book is analyzed
         else: st.error("Issue not found.")
 
-if st.session_state.current_summary:
-    tab1, tab2 = st.tabs(["📖 Summary & Audio", "💬 Interrogator Chat"])
-    
-    with tab1:
+# --- TAB 1: SUMMARY LOGIC ---
+with tab1:
+    if st.session_state.current_summary:
         col_a, col_b = st.columns([1, 2])
         with col_a: 
             if st.session_state.current_img: st.image(st.session_state.current_img)
@@ -238,44 +241,40 @@ if st.session_state.current_summary:
                     <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 10px; color: white; font-family: sans-serif;">
                         <button onclick="document.getElementById('c-player').play()" style="background:#00d4ff;border:none;border-radius:5px;padding:5px 15px;cursor:pointer;font-weight:bold;">PLAY</button>
                         <button onclick="document.getElementById('c-player').pause()" style="background:#333;border:none;border-radius:5px;padding:5px 15px;cursor:pointer;color:white;">PAUSE</button>
-                        <div style="flex-grow: 1; margin: 0 20px;">
-                            <label style="font-size: 12px;">Speed: <span id="s-val">1.0x</span></label>
-                            <input type="range" id="s-sld" min="0.5" max="2.0" step="0.1" value="1.0" style="width: 100%; cursor: pointer;">
-                        </div>
                     </div>
                 </div>
-                <script>
-                    var a = document.getElementById('c-player'); var s = document.getElementById('s-sld'); var d = document.getElementById('s-val');
-                    s.oninput = function() {{ a.playbackRate = this.value; d.innerHTML = this.value + 'x'; }};
-                </script>
                 """
                 components.html(audio_html, height=120)
             
             st.divider()
             eb = create_epub(st.session_state.current_title, st.session_state.current_summary, st.session_state.current_img)
             st.download_button("📖 Download EPUB", eb, f"{st.session_state.current_title}.epub", "application/epub+zip", use_container_width=True)
+    else:
+        st.info("👈 Use the sidebar to search and analyze a comic to see its summary here!")
 
-    with tab2:
-        st.caption(f"Frontier Reasoning: {st.session_state.current_title}")
+# --- TAB 2: CHAT LOGIC (ALWAYS OPEN) ---
+with tab2:
+    if st.session_state.current_title:
+        st.caption(f"Currently Discussing: {st.session_state.current_title}")
+    else:
+        st.caption("General Chat Mode: Ask me anything about comics!")
+    
+    for chat in st.session_state.chat_history:
+        role_label = "🦸 You" if chat['role'] == 'user' else "🤖 Interrogator"
+        st.markdown(f"<div class='chat-bubble'><b>{role_label}:</b><br>{chat['content']}</div>", unsafe_allow_html=True)
+    
+    user_input = st.chat_input("Message the Interrogator...")
+    if user_input:
+        st.session_state.chat_history.append({"role": "user", "content": user_input})
         
-        # Display chat history in order
-        for chat in st.session_state.chat_history:
-            role_label = "🦸 You" if chat['role'] == 'user' else "🤖 Interrogator"
-            st.markdown(f"<div class='chat-bubble'><b>{role_label}:</b><br>{chat['content']}</div>", unsafe_allow_html=True)
-        
-        # Stable Chat Input
-        user_input = st.chat_input("Ask about this issue...")
-        if user_input:
-            # Add user message to history immediately
-            st.session_state.chat_history.append({"role": "user", "content": user_input})
+        with st.spinner("Consulting the archives..."):
+            # If a summary exists, use it as context. Otherwise, just go general.
+            context = st.session_state.current_summary if st.session_state.current_summary else "General comic knowledge."
+            chat_prompt = f"You are a comic expert. Context: {context}\n\nUser Question: {user_input}"
             
-            # Show a targeted spinner
-            with st.spinner("Consulting the archives..."):
-                chat_prompt = f"Expert comic historian. Summary Context: {st.session_state.current_summary}\n\nUser Question: {user_input}"
-                try:
-                    # Using Flash for instant chat replies
-                    response = ai_client.models.generate_content(model="gemini-2.0-flash", contents=chat_prompt)
-                    st.session_state.chat_history.append({"role": "assistant", "content": response.text})
-                    st.rerun()
-                except Exception as chat_err:
-                    st.error(f"Chat failed: {chat_err}")
+            try:
+                response = ai_client.models.generate_content(model="gemini-2.0-flash", contents=chat_prompt)
+                st.session_state.chat_history.append({"role": "assistant", "content": response.text})
+                st.rerun()
+            except Exception as e:
+                st.error(f"Chat failed: {e}")
