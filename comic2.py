@@ -27,6 +27,16 @@ st.markdown("""
     div[data-testid="column"] button { padding-top: 10px; padding-bottom: 10px; }
     </style>
     """, unsafe_allow_html=True)
+<style>
+    /* ... your existing styles ... */
+    .audio-container {
+        background: #1a1c24;
+        padding: 20px;
+        border-radius: 10px;
+        border-left: 5px solid #00d4ff;
+        margin: 10px 0;
+    }
+</style>
 
 # --- 2. API KEYS ---
 COMIC_VINE_KEY = os.environ.get("COMIC_VINE_KEY")
@@ -242,10 +252,40 @@ if st.session_state.current_summary:
                 st.session_state.needs_audio = False
             st.rerun()
         
-        if st.session_state.get("audio_bytes"):
-            # Fixed player: uses direct bytes with explicit format
-            st.audio(st.session_state.audio_bytes, format="audio/mp3")
+     if st.session_state.get("audio_bytes"):
+            # Convert bytes to base64 so HTML can read it
+            b64_audio = base64.b64encode(st.session_state.audio_bytes).decode()
+            
+            # Custom HTML5 Player with Speed Control
+            audio_html = f"""
+            <div style="background-color: #1a1c24; padding: 15px; border-radius: 10px; border-left: 4px solid #00d4ff;">
+                <audio id="comic-narrator" style="width: 100%;">
+                    <source src="data:audio/mp3;base64,{b64_audio}" type="audio/mp3">
+                </audio>
+                <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 10px; color: white; font-family: sans-serif;">
+                    <button onclick="document.getElementById('comic-narrator').play()" style="background: #00d4ff; border: none; border-radius: 5px; padding: 5px 15px; cursor: pointer; font-weight: bold;">PLAY</button>
+                    <button onclick="document.getElementById('comic-narrator').pause()" style="background: #333; border: none; border-radius: 5px; padding: 5px 15px; cursor: pointer; color: white;">PAUSE</button>
+                    <div style="flex-grow: 1; margin: 0 20px;">
+                        <label style="font-size: 12px; display: block; margin-bottom: 5px;">Playback Speed: <span id="speed-val">1.0x</span></label>
+                        <input type="range" id="speed-slider" min="0.5" max="2.0" step="0.1" value="1.0" style="width: 100%; cursor: pointer;">
+                    </div>
+                </div>
+            </div>
+
+            <script>
+                var audio = document.getElementById('comic-narrator');
+                var slider = document.getElementById('speed-slider');
+                var display = document.getElementById('speed-val');
+
+                slider.oninput = function() {{
+                    audio.playbackRate = this.value;
+                    display.innerHTML = this.value + 'x';
+                }};
+            </script>
+            """
+            components.html(audio_html, height=120)
             
         st.divider()
         eb = create_epub(st.session_state.current_title, st.session_state.current_summary, st.session_state.current_img)
         st.download_button("📖 Download EPUB", eb, f"{st.session_state.current_title}.epub", "application/epub+zip", use_container_width=True)
+
