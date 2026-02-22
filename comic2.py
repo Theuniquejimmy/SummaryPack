@@ -133,8 +133,11 @@ def get_issue_data(volume_id, issue_num):
         return res.get('results', [])[0] if res.get('results') else None
     except Exception: return None
 
+# --- THE ALL-IN-ONE GEMINI HISTORIAN (ULTRA-RELIABLE VERSION) ---
 @st.cache_data(show_spinner=False)
 def generate_ai_summary(issue_data, series_name, issue_num, alt_name=""):
+    import random # Added for jitter
+    
     chars = ", ".join([c['name'] for c in (issue_data.get('character_credits') or [])])
     creators = ", ".join([p['name'] for p in (issue_data.get('person_credits') or [])])
     plot = str(issue_data.get('deck') or issue_data.get('description') or "")[:5000]
@@ -143,34 +146,59 @@ def generate_ai_summary(issue_data, series_name, issue_num, alt_name=""):
     base_title = series_name.split(' (')[0]
     search_target = f"{base_title} {alt_name} issue {issue_num}" if alt_name else f"{series_name} issue {issue_num}"
     
-    prompt = f"You are an expert comic book historian. Write a highly detailed, 500+ word deep-dive summary into {series_name} #{issue_num}."
+    prompt = f"You are an expert comic book historian. Write a detailed, 500+ word deep-dive summary into {series_name} #{issue_num}."
     
     if needs_search:
         prompt += f"""
         CRITICAL: Local database is empty. ACTIVELY GOOGLE SEARCH the plot for: "{search_target}".
-        TIPS: Cross-reference with creators: {creators}. If year-based search fails, try searching by Volume numbers.
-        Do not apologize. ONLY summarize issue #{issue_num}. Do not summarize full story arcs.
+        TIPS: Cross-reference with creators: {creators}. Search by Volume if needed.
+        Do not apologize. ONLY summarize issue #{issue_num}.
         """
     else:
         prompt += f"\nUse this plot: {plot}"
         
     prompt += f"\nCharacters involved: {chars}\nFormat with headings: Context, Detailed Plot, Key Moments, Significance."
     
-    wait_time = 10 
-    for attempt in range(3):
+    # Try two different models to bypass local congestion
+    models_to_try = ["gemini-2.0-flash", "gemini-2.0-flash-lite"]
+    
+    for model_name in models_to_try:
+        wait_time = 12 
+        for attempt in range(3):
+            try:
+                from google.genai import types
+                config = types.GenerateContentConfig(
+                    tools=[types.Tool(google_search=types.GoogleSearch())] if needs_search else None
+                )
+                resp = ai_client.models.generate_content(model=model_name, contents=prompt, config=config)
+                return resp.text
+            except Exception as e:
+                error_str = str(e).upper()
+                # Check for rate limit (429) or backend overload (500/503)
+                if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str or "500" in error_str:
+                    # Added 'Jitter' (random extra wait) to bypass synchronized blocks
+                    jitter = random.uniform(1, 4)
+                    sleep_duration = wait_time + jitter
+                    st.toast(f"⏳ {model_name} busy. Cooling down {int(sleep_duration)}s...")
+                    time.sleep(sleep_duration)
+                    wait_time *= 2  
+                else:
+                    # If it's a different error (like a bad API key), stop immediately
+                    st.error(f"API Error: {e}")
+                    break 
+    
+    # Final Fallback to NVIDIA if both Gemini models fail
+    if nvidia_client:
+        st.caption("ℹ️ *Gemini exhausted. Using NVIDIA Backup...*")
         try:
-            from google.genai import types
-            config = types.GenerateContentConfig(
-                tools=[types.Tool(google_search=types.GoogleSearch())] if needs_search else None
+            comp = nvidia_client.chat.completions.create(
+                model="meta/llama-3.1-70b-instruct", 
+                messages=[{"role": "user", "content": prompt}]
             )
-            resp = ai_client.models.generate_content(model="gemini-2.0-flash", contents=prompt, config=config)
-            return resp.text
-        except Exception as e:
-            if "429" in str(e):
-                time.sleep(wait_time)
-                wait_time *= 2  
-            else: break 
-    return "AI Error: Failed to generate summary."
+            return comp.choices[0].message.content
+        except Exception: pass
+             
+    return "AI Error: The servers are currently overloaded. Please wait 1 minute and try again."
 
 def create_epub(title, content):
     book = epub.EpubBook()
@@ -274,3 +302,4 @@ if st.session_state.current_summary:
         st.divider()
         epub_bytes = create_epub(st.session_state.current_title, st.session_state.current_summary)
         st.download_button(label="📖 Download EPUB", data=epub_bytes, file_name=f"{st.session_state.current_title}.epub", mime="application/epub+zip", use_container_width=True)
+
