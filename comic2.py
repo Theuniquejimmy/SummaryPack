@@ -10,6 +10,7 @@ import time
 import io
 import markdown
 import random
+import zipfile
 import streamlit.components.v1 as components
 from google import genai
 from openai import OpenAI
@@ -39,7 +40,7 @@ if not COMIC_VINE_KEY or not GEMINI_KEY:
 ai_client = genai.Client(api_key=GEMINI_KEY)
 nvidia_client = OpenAI(base_url="https://integrate.api.nvidia.com/v1", api_key=NVIDIA_API_KEY) if NVIDIA_API_KEY else None
 
-# --- 3. HELPER FUNCTIONS (Must be above UI) ---
+# --- 3. HELPER FUNCTIONS ---
 
 def load_history():
     if os.path.exists("comic_history.json"):
@@ -76,6 +77,7 @@ def get_issue_data(volume_id, issue_num):
 @st.cache_data(show_spinner=False)
 def generate_ai_summary(issue_data, series_name, issue_num, alt_name=""):
     chars = ", ".join([c['name'] for c in (issue_data.get('character_credits') or [])])
+    creators = ", ".join([p['name'] for p in (issue_data.get('person_credits') or [])])
     plot = str(issue_data.get('deck') or issue_data.get('description') or "")[:5000]
     needs_search = len(plot.strip()) < 50
     base_title = series_name.split(' (')[0]
@@ -83,13 +85,13 @@ def generate_ai_summary(issue_data, series_name, issue_num, alt_name=""):
     
     prompt = f"You are an expert comic book historian. Write a detailed 500-800 word deep-dive summary into {series_name} #{issue_num}."
     if needs_search:
-        prompt += f"\nCRITICAL: Local database is empty. ACTIVELY SEARCH the plot for: '{search_target}'. Ensure events are specifically for issue #{issue_num} and not the whole arc."
+        prompt += f"\nCRITICAL: Use your GOOGLE SEARCH TOOL to find the plot for: '{search_target}'. Ensure events are specifically for issue #{issue_num} and not the whole arc or trade paperback."
     else:
         prompt += f"\nSOURCE PLOT: {plot}"
-    prompt += f"\nCharacters: {chars}\nFormat with headings: Context, Detailed Plot, Key Moments, Significance."
+    prompt += f"\nCreators involved: {creators}\nCharacters: {chars}\nFormat with headings: Context, Detailed Plot, Key Moments, Significance."
 
-    # Use 2.5 Flash first for Speed, then fallback to 3.0 Pro for Intelligence
-    models_to_try = ["gemini-2.5-flash", "gemini-3.1-pro-preview"]
+    # SPEED PRIORITY: 2.5 Flash is the snappiest for searches
+    models_to_try = ["gemini-2.5-flash", "gemini-3-flash-preview", "gemini-3.1-pro-preview"]
     for model_name in models_to_try:
         wait_time = 6
         for attempt in range(2):
@@ -103,16 +105,15 @@ def generate_ai_summary(issue_data, series_name, issue_num, alt_name=""):
                     time.sleep(wait_time + random.uniform(1, 3))
                     wait_time *= 2
                 else: break
-    return "AI Error: Could not reach servers."
+    return "AI Error: Model Timeout. Check connectivity."
 
 def create_epub(title, content, cover_url=None):
     book = epub.EpubBook()
-    book.set_identifier(title.replace(" ", "_"))
+    book.set_identifier(title.replace(" ", "_").replace("#", ""))
     book.set_title(title)
     book.set_language('en')
     book.add_author("Comic Vault Analyzer")
     
-    # --- ADD COVER IMAGE ---
     if cover_url:
         try:
             img_data = requests.get(cover_url).content
@@ -168,13 +169,34 @@ with st.sidebar:
     else: trigger = False
     
     st.divider()
-    voice_map = {"Christopher (Deep)": "en-US-ChristopherNeural", "Ryan (British)": "en-GB-RyanNeural"}
+    st.header("📦 Batch Processor")
+    batch_range = st.text_input("Issue Range (e.g., 1-5)")
+    if st.button("Start Batch run"):
+        if '-' in batch_range and 'vid' in locals():
+            try:
+                s, e = map(int, batch_range.split('-'))
+                prog = st.progress(0); stat = st.empty()
+                for i, curr in enumerate(range(s, e + 1)):
+                    stat.text(f"Processing #{curr}...")
+                    b_data = get_issue_data(vid, str(curr))
+                    if b_data:
+                        b_sum = generate_ai_summary(b_data, sel_vol, str(curr), st.session_state.alt_name)
+                        b_epub = create_epub(f"{sel_vol} #{curr}", b_sum, b_data.get('image', {}).get('medium_url'))
+                        if not os.path.exists("exports"): os.makedirs("exports")
+                        with open(f"exports/{sel_vol.replace(' ','_')}_{curr}.epub", "wb") as f: f.write(b_epub)
+                    prog.progress((i + 1) / (e - s + 1))
+                    time.sleep(random.uniform(3, 5)) # Safety cooldown
+                stat.success(f"Done! {e-s+1} files in /exports")
+            except Exception as ex: st.error(f"Batch Error: {ex}")
+
+    st.divider()
+    voice_map = {"Christopher (Deep)": "en-US-ChristopherNeural", "Ryan (British)": "en-GB-RyanNeural", "Natasha (AU)": "en-AU-NatashaNeural"}
     sel_voice = st.selectbox("Narrator", options=list(voice_map.keys()))
 
 # --- 6. MAIN EXECUTION ---
 if query and trigger:
     st.session_state.auto = False
-    with st.spinner("Analyzing..."):
+    with st.spinner("Analyzing comic archives..."):
         data = get_issue_data(vid, st.session_state.issue_num)
         if data:
             summary = generate_ai_summary(data, sel_vol, st.session_state.issue_num, st.session_state.get("alt_name", ""))
@@ -184,6 +206,7 @@ if query and trigger:
             if st.session_state.current_title not in st.session_state.history:
                 st.session_state.history.append(st.session_state.current_title); save_history(st.session_state.history)
             st.session_state.needs_audio = True
+        else: st.error("Issue not found.")
 
 if st.session_state.current_summary:
     col_a, col_b = st.columns([1, 2])
@@ -205,4 +228,4 @@ if st.session_state.current_summary:
             
         st.divider()
         eb = create_epub(st.session_state.current_title, st.session_state.current_summary, st.session_state.current_img)
-        st.download_button("📖 Download EPUB", eb, f"{st.session_state.current_title}.epub", "application/epub+zip")
+        st.download_button("📖 Download EPUB", eb, f"{st.session_state.current_title}.epub", "application/epub+zip", use_container_width=True)
