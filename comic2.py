@@ -5,6 +5,9 @@ import re
 import asyncio
 import edge_tts
 import base64
+from ebooklib import epub
+import markdown
+import io
 import json
 import time
 import streamlit.components.v1 as components
@@ -240,7 +243,36 @@ def create_audio(text, voice_choice):
     except Exception as e:
         st.error(f"TTS Error: {e}")
         return None
+def create_epub(title, content, writers, artists):
+    book = epub.EpubBook()
+    
+    # Set Metadata
+    book.set_identifier(title.replace(" ", "_").replace("#", ""))
+    book.set_title(title)
+    book.set_language('en')
+    book.add_author(f"Writer: {writers} | Artist: {artists}")
 
+    # Create Chapter
+    c1 = epub.EpubHtml(title=title, file_name='chap_01.xhtml', lang='en')
+    
+    # Convert Markdown to HTML for the EPUB body
+    html_body = markdown.markdown(content)
+    c1.content = f'<h2>{title}</h2>{html_body}'
+    
+    book.add_item(c1)
+
+    # Define Table Of Contents and Spine
+    book.toc = (epub.Link('chap_01.xhtml', title, title),)
+    book.add_item(epub.EpubNcx())
+    book.add_item(epub.EpubNav())
+    book.spine = ['nav', c1]
+
+    # Write to a byte stream so Streamlit can download it
+    out_stream = io.BytesIO()
+    epub.write_epub(out_stream, book)
+    
+    return out_stream.getvalue()
+    
 # --- UI ---
 st.title("📚 Comic Vault Analyzer")
 
@@ -396,3 +428,24 @@ if st.session_state.current_summary:
             )
         else:
             st.warning("⚠️ Audio could not be generated.")
+
+            # --- NEW: EPUB EXPORT BUTTON ---
+        st.divider()
+        st.caption("📖 **Save Summary Offline**")
+        
+        epub_bytes = create_epub(
+            title=st.session_state.current_title, 
+            content=st.session_state.current_summary,
+            writers=st.session_state.current_writers,
+            artists=st.session_state.current_artists
+        )
+        
+        safe_title = "".join([c for c in st.session_state.current_title if c.isalpha() or c.isdigit() or c==' ']).rstrip()
+        st.download_button(
+            label="📖 Download as EPUB",
+            data=epub_bytes,
+            file_name=f"{safe_title}.epub",
+            mime="application/epub+zip",
+            use_container_width=True
+        )
+
